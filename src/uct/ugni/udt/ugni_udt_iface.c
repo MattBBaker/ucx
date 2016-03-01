@@ -28,6 +28,38 @@ static ucs_config_field_t uct_ugni_udt_iface_config_table[] = {
     {NULL}
 };
 
+static void uct_ugni_udt_progress(void *arg);
+
+static UCS_CLASS_CLEANUP_FUNC(uct_ugni_udt_iface_t)
+{
+    gni_return_t ugni_rc;
+    ucs_status_t status;
+
+    uct_worker_progress_unregister(self->super.super.worker,
+                                   uct_ugni_udt_progress, self);
+    if (!self->super.activated) {
+        /* We done with release */
+        return;
+    }
+
+    UCS_ASYNC_BLOCK(self->super.super.worker->async);
+    status = ucs_async_remove_timer(self->async.timer_id);
+    ucs_assert_always(UCS_OK == status);
+    ucs_twheel_cleanup(&self->async.slow_timer);
+    ugni_rc = GNI_EpPostDataCancel(self->ep_any);
+    if (GNI_RC_SUCCESS != ugni_rc) {
+        ucs_debug("GNI_EpPostDataCancel failed, Error status: %s %d",
+                  gni_err_str[ugni_rc], ugni_rc);
+        //return;
+    }
+    ucs_mpool_put(self->desc_any);
+    //ucs_assert_always(self->super.super.super.ops.iface_close == UCS_CLASS_DELETE_FUNC_NAME(uct_ugni_udt_iface_t));
+    ucs_mpool_cleanup(&self->free_desc, 1);
+    UCS_ASYNC_UNBLOCK(self->super.super.worker->async);
+}
+
+static UCS_CLASS_DEFINE_DELETE_FUNC(uct_ugni_udt_iface_t, uct_iface_t);
+
 static UCS_F_ALWAYS_INLINE ucs_time_t uct_ugni_udt_iface_get_async_time(uct_ugni_udt_iface_t *iface){
     return iface->super.super.worker->async->last_wakeup;
 }
@@ -49,26 +81,7 @@ static void uct_ugni_udt_queue_rx_desc(uct_ugni_udt_iface_t *iface, uct_ugni_udt
                              queue_element, queue_element = NULL);
 
     ucs_assert_always(queue_element != NULL);
-
     queue_element->desc = desc;
-
-    ucs_debug("Keeping desc for queued rx. %p", desc);
-
-    uct_ugni_udt_header_t *header;
-    void *payload;
-
-    header = uct_ugni_udt_get_rheader(desc, iface);
-    payload = uct_ugni_udt_get_rpayload(desc, iface);
-
-    int htype = header->type;
-    int ham_id = header->am_id;
-    int hlength = header->length;
-    uint64_t *hp = (uint64_t*)payload;
-    uint64_t pl1 = hp[0];
-    uint64_t pl2 = hp[1];
-    ucs_debug("Queued desc, header data:\n\ttype=%i (UCT_UGNI_UDT_PAYLOAD=%i)\n\tam_id=%i\n\tlength=%i\n\tpayload=%lx %lx\n\tseq_id=%lu", 
-              htype, UCT_UGNI_UDT_PAYLOAD, ham_id, hlength, pl1, pl2, header->seq_id);
-
     ucs_queue_push(&iface->sync_am_events, &queue_element->queue);
 }
 
@@ -86,14 +99,6 @@ static ucs_status_t attempt_am(uct_ugni_udt_iface_t *iface, uct_ugni_udt_desc_t 
     header = uct_ugni_udt_get_rheader(desc, iface);
     payload = uct_ugni_udt_get_rpayload(desc, iface);
     user_desc = uct_ugni_udt_get_user_desc(desc, iface);
-
-        int htype = header->type;
-        int ham_id = header->am_id;
-        int hlength = header->length;
-        uint64_t *hp = (uint64_t*)payload;
-        uint64_t pl1 = hp[0];
-        uint64_t pl2 = hp[1];
-       ucs_debug("processing message, header data:\n\ttype=%i (UCT_UGNI_UDT_PAYLOAD=%i)\n\tam_id=%i\n\tlength=%i\n\tpayload=%lx %lx", htype, UCT_UGNI_UDT_PAYLOAD, ham_id, hlength, pl1, pl2);
 
     uct_iface_trace_am(&iface->super.super, UCT_AM_TRACE_TYPE_RECV,
                        header->am_id, payload, header->length, "RX: AM");
@@ -156,16 +161,6 @@ static void _uct_ugni_udt_progress(void *arg, async_status_t is_async)
     header = uct_ugni_udt_get_rheader(desc, iface);
     user_desc = uct_ugni_udt_get_user_desc(desc, iface);
 
-    int htype = header->type;
-    int ham_id = header->am_id;
-    int hlength = header->length;
-    void *payload = uct_ugni_udt_get_rpayload(desc, iface);
-    uint64_t *hp = (uint64_t*)payload;
-    uint64_t pl1 = hp[0];
-    uint64_t pl2 = hp[1];
-    ucs_debug("Got message, header data:\n\ttype=%i (UCT_UGNI_UDT_PAYLOAD=%i)\n\tam_id=%i\n\tlength=%i\n\tpayload=%lx %lx", 
-              htype, UCT_UGNI_UDT_PAYLOAD, ham_id, hlength, pl1, pl2);
-
     if(UCT_UGNI_UDT_ANY == id){
         /* New incomming message */
         ucs_assert_always(header->type == UCT_UGNI_UDT_PAYLOAD);
@@ -174,7 +169,6 @@ static void _uct_ugni_udt_progress(void *arg, async_status_t is_async)
             /* Allocate a new element */
             UCT_TL_IFACE_GET_TX_DESC(&iface->super.super, &iface->free_desc,
                                      new_desc, goto exit);
-            ucs_debug("Keeping the wildcard desc for sync processing, allocating new desc: %p", new_desc);
             uct_ugni_udt_queue_rx_desc(iface, desc);
             /* set the new desc */
             iface->desc_any = new_desc;
@@ -189,7 +183,7 @@ static void _uct_ugni_udt_progress(void *arg, async_status_t is_async)
                 /* Allocate a new element */
                 UCT_TL_IFACE_GET_TX_DESC(&iface->super.super, &iface->free_desc,
                                          new_desc, goto exit);
-                ucs_debug("Keeping the wildcard desc for AM release. New desc for wildcard: %p", new_desc);
+                ucs_debug("Keeping the wildcard desc for AM release. New desc for wildcard: %p old desc: %p", new_desc, iface->desc_any);
                 /* set the new desc */
                 iface->desc_any = new_desc;
             }
@@ -202,7 +196,6 @@ static void _uct_ugni_udt_progress(void *arg, async_status_t is_async)
         if (header->type == UCT_UGNI_UDT_PAYLOAD) {
             /* data message was received */
             if(requires_sync(iface, header->am_id) && UCT_UGNI_ASYNC == is_async){
-                ucs_debug("Queueing EP reply for future release.");
                 uct_ugni_udt_queue_rx_desc(iface, desc);
             } else {
                 pthread_mutex_unlock(&uct_ugni_global_lock);
@@ -212,15 +205,17 @@ static void _uct_ugni_udt_progress(void *arg, async_status_t is_async)
                 if (UCS_OK == status) {
                     uct_ugni_udt_reset_desc(ep->posted_desc, iface);
                     ucs_mpool_put(ep->posted_desc);
+                    ucs_assert_always(iface->super.super.super.ops.iface_close == UCS_CLASS_DELETE_FUNC_NAME(uct_ugni_udt_iface_t));
                 } else {
                     /* set iface for a later release call */
                     uct_recv_desc_iface(user_desc) = &iface->super.super.super;
-                    ucs_debug("Keeping ep desc for later release by am.");
+                    ucs_debug("Keeping ep desc for later release by am. old desc: %p", ep->posted_desc);
                 }
             }
         } else {
             uct_ugni_udt_reset_desc(ep->posted_desc, iface);
             ucs_mpool_put(ep->posted_desc);
+            ucs_assert_always(iface->super.super.super.ops.iface_close == UCS_CLASS_DELETE_FUNC_NAME(uct_ugni_udt_iface_t));
         }
         /* no data, just an ack */
         --iface->super.outstanding;
@@ -239,11 +234,12 @@ static void uct_ugni_udt_dispatch_rx_queue(uct_ugni_udt_iface_t *iface)
     ucs_status_t status = attempt_am(iface, desc, UCT_UGNI_SYNC);
     if(UCS_OK == status) {
         uct_ugni_udt_reset_desc(desc, iface);
-        ucs_debug("giving up desc %p", desc);
         ucs_mpool_put(desc);
+        ucs_assert_always(iface->super.super.super.ops.iface_close == UCS_CLASS_DELETE_FUNC_NAME(uct_ugni_udt_iface_t));
     } else {
-        ucs_debug("Keeping desc for AM from sync dispatcher.");
-        uct_recv_desc_iface(desc) = &iface->super.super.super;
+        ucs_debug("Keeping desc for AM from sync dispatcher. desc: %p", desc);
+        void *user_desc = uct_ugni_udt_get_user_desc(desc, iface);
+        uct_recv_desc_iface(user_desc) = &iface->super.super.super;
     }
 }
 
@@ -254,15 +250,15 @@ static void uct_ugni_udt_progress(void *arg)
     UCS_ASYNC_BLOCK(iface->super.super.worker->async);
 
     while(!ucs_queue_is_empty(&iface->sync_am_events)) {
-        ucs_debug("Dispatching sync am queue");
         uct_ugni_udt_dispatch_rx_queue(iface);
     }
 
     _uct_ugni_udt_progress(arg, UCT_UGNI_SYNC);
 
-    UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
     /* have a go a processing the pending queue */
     ucs_arbiter_dispatch(&iface->super.arbiter, 1, uct_ugni_ep_process_pending, NULL);
+
+    UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
 }
 
 static void uct_ugni_udt_iface_release_am_desc(uct_iface_t *tl_iface, void *desc)
@@ -274,7 +270,9 @@ static void uct_ugni_udt_iface_release_am_desc(uct_iface_t *tl_iface, void *desc
     ugni_desc = (uct_ugni_udt_desc_t *)((uct_am_recv_desc_t *)desc - 1);
     ucs_assert_always(NULL != ugni_desc);
     uct_ugni_udt_reset_desc(ugni_desc, iface);
+    ucs_assert_always(tl_iface->ops.iface_close == UCS_CLASS_DELETE_FUNC_NAME(uct_ugni_udt_iface_t));
     ucs_mpool_put(ugni_desc);
+    ucs_assert_always(tl_iface->ops.iface_close == UCS_CLASS_DELETE_FUNC_NAME(uct_ugni_udt_iface_t));
 }
 
 static ucs_status_t uct_ugni_udt_query_tl_resources(uct_pd_h pd,
@@ -318,37 +316,9 @@ static void uct_ugni_udt_iface_timer(void *arg){
     ucs_trace_async("iface(%p) slow_timer_sweep: now %llu", iface, now);
     ucs_twheel_sweep(&iface->async.slow_timer, now);
     _uct_ugni_udt_progress((void *)iface, UCT_UGNI_ASYNC);
+    ucs_arbiter_dispatch(&iface->super.arbiter, 1, uct_ugni_ep_process_pending, NULL);
     UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
 }
-
-static UCS_CLASS_CLEANUP_FUNC(uct_ugni_udt_iface_t)
-{
-    gni_return_t ugni_rc;
-    ucs_status_t status;
-
-    uct_worker_progress_unregister(self->super.super.worker,
-                                   uct_ugni_udt_progress, self);
-    if (!self->super.activated) {
-        /* We done with release */
-        return;
-    }
-
-    UCS_ASYNC_BLOCK(self->super.super.worker->async);
-    status = ucs_async_remove_timer(self->async.timer_id);
-    ucs_assert_always(UCS_OK == status);
-    ucs_twheel_cleanup(&self->async.slow_timer);
-    ugni_rc = GNI_EpPostDataCancel(self->ep_any);
-    if (GNI_RC_SUCCESS != ugni_rc) {
-        ucs_debug("GNI_EpPostDataCancel failed, Error status: %s %d",
-                  gni_err_str[ugni_rc], ugni_rc);
-        //return;
-    }
-    ucs_mpool_put(self->desc_any);
-    ucs_mpool_cleanup(&self->free_desc, 1);
-    UCS_ASYNC_UNBLOCK(self->super.super.worker->async);
-}
-
-static UCS_CLASS_DEFINE_DELETE_FUNC(uct_ugni_udt_iface_t, uct_iface_t);
 
 uct_iface_ops_t uct_ugni_udt_iface_ops = {
     .iface_query           = uct_ugni_udt_iface_query,
@@ -408,7 +378,7 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_udt_iface_t, uct_pd_h pd, uct_worker_h worke
         ucs_error("Mpool creation failed");
         goto exit;
     }
-
+    //TODO review error chain
     status = ucs_mpool_init(&self->free_queue,
                             0,
                             sizeof(uct_ugnu_udt_queued_am_t),
@@ -447,8 +417,6 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_udt_iface_t, uct_pd_h pd, uct_worker_h worke
     status = uct_ugni_udt_ep_any_post(self);
 
     pthread_mutex_unlock(&uct_ugni_global_lock);
-
-    ucs_debug("First wildcard desc, %p", desc);
 
     if (UCS_OK != status) {
         /* We can't continue if we can't post the first receive */

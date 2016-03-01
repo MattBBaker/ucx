@@ -58,7 +58,6 @@ typedef struct uct_ugni_udt_header {
     uint8_t type;
     uint8_t am_id;
     uint8_t length;
-    uint64_t seq_id;
 } uct_ugni_udt_header_t;
 
 typedef struct {
