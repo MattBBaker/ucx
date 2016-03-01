@@ -25,6 +25,8 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_udt_ep_t, uct_iface_t *tl_iface,
 static UCS_CLASS_CLEANUP_FUNC(uct_ugni_udt_ep_t)
 {
     gni_return_t ugni_rc;
+    uct_ugni_udt_iface_t *iface = ucs_derived_of(self->super.super.super.iface, uct_ugni_udt_iface_t);
+    UCS_ASYNC_BLOCK(iface->super.super.worker->async);
     if (self->posted_desc) {
         ugni_rc = GNI_EpPostDataCancel(self->super.ep);
         if (GNI_RC_SUCCESS != ugni_rc) {
@@ -32,6 +34,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ugni_udt_ep_t)
                       gni_err_str[ugni_rc], ugni_rc);
         }
     }
+    UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
 }
 
 UCS_CLASS_DEFINE(uct_ugni_udt_ep_t, uct_ugni_ep_t);
@@ -50,6 +53,8 @@ enum {
  * 0 - perform am bcopy sending
  */
 
+uint64_t seq_id = 0;
+
 static UCS_F_ALWAYS_INLINE ssize_t
 uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, uct_ugni_udt_iface_t *iface,
                                uint8_t am_id, unsigned length, uint64_t header,
@@ -67,19 +72,54 @@ uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, u
         UCT_TL_IFACE_STAT_TX_NO_RES(&iface->super.super);
         return UCS_ERR_NO_RESOURCE;
     }
+    UCS_ASYNC_BLOCK(iface->super.super.worker->async);
     UCT_TL_IFACE_GET_TX_DESC(&iface->super.super, &iface->free_desc,
                              desc, return UCS_ERR_NO_RESOURCE);
+
+    //ucs_debug("Ep desc allocated: %p", desc);
 
     rheader = uct_ugni_udt_get_rheader(desc, iface);
     rheader->type = UCT_UGNI_UDT_EMPTY;
 
     sheader = uct_ugni_udt_get_sheader(desc, iface);
+#if 0
+    int htype = sheader->type;
+    int ham_id = sheader->am_id;
+    int hlength = sheader->length;
+    void *upayload = uct_ugni_udt_get_spayload(desc, iface);
+    uint64_t *hp = (uint64_t*)upayload;
+    uint64_t *hp1 = (uint64_t*)payload;
+    uint64_t pl1 = hp[0];
+    uint64_t pl2 = hp[1];
+    uint64_t pl3;
+    uint64_t pl4;
 
+    sheader->seq_id = seq_id;
+    seq_id++;
+#endif
     if (is_short) {
         uint64_t *hdr = (uint64_t *)uct_ugni_udt_get_spayload(desc, iface);
         *hdr = header;
+#if 0
+        hp = (uint64_t*)upayload;
+        pl1 = hp[0];
+        pl2 = hp[1];
+
+        ucs_debug("Pack message, header data:\n\ttype=%i (UCT_UGNI_UDT_PAYLOAD=%i)\n\tam_id=%i\n\tlength=%i\n\tpayload=%lx %lx\n\tseq_id=%lu",
+                  htype, UCT_UGNI_UDT_PAYLOAD, ham_id, hlength, pl1, pl2,  sheader->seq_id);
+#endif
         memcpy((void*)(hdr + 1), payload, length);
+
         sheader->length = length + sizeof(header);
+#if 0
+        pl1 = hp[0];
+        pl2 = hp[1];
+        pl3 = hp1[0];
+        pl4 = hp1[1];
+
+        ucs_debug("Pack message memcpy, header data:\n\ttype=%i (UCT_UGNI_UDT_PAYLOAD=%i)\n\tam_id=%i\n\tlength=%i\n\tpayload=%lx %lx\n\tseq_id=%lu\n\tmsg_length=%u\n\tpayload=%lx %lx",
+                  htype, UCT_UGNI_UDT_PAYLOAD, ham_id, hlength, pl1, pl2,  sheader->seq_id, (unsigned)(length), pl3, pl4);
+#endif
         msg_length = sheader->length + sizeof(*sheader);
         UCT_TL_EP_STAT_OP(ucs_derived_of(ep, uct_base_ep_t), AM, SHORT, sizeof(header) + length);
     } else {
@@ -98,18 +138,28 @@ uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, u
     sheader->type = UCT_UGNI_UDT_PAYLOAD;
 
     ucs_assert_always(sheader->length <= GNI_DATAGRAM_MAXSIZE);
-
+#if 0
+    ucs_debug("ep: %p datagram_id: %u", ep, ep->super.hash_key);
+#endif
     pthread_mutex_lock(&uct_ugni_global_lock);
     ugni_rc = GNI_EpPostDataWId(ep->super.ep,
                                 sheader, msg_length,
                                 rheader, (uint16_t)iface->config.udt_seg_size,
                                 ep->super.hash_key);
     pthread_mutex_unlock(&uct_ugni_global_lock);
+#if 0
+    ucs_debug("Send message, header data:\n\ttype=%i (UCT_UGNI_UDT_PAYLOAD=%i)\n\tam_id=%i\n\tlength=%i\n\tpayload=%lx %lx\n\tseq_id=%lu",
+              htype, UCT_UGNI_UDT_PAYLOAD, ham_id, hlength, pl1, pl2,  sheader->seq_id);
+
+    ucs_debug("ugni_rc: %s %i", gni_err_str[ugni_rc], ugni_rc);
+#endif
+    ucs_assert_always(ugni_rc != GNI_RC_INVALID_PARAM);
     UCT_UGNI_UDT_CHECK_RC(ugni_rc);
 
     ep->posted_desc = desc;
     ++ep->super.outstanding;
     ++iface->super.outstanding;
+
     return is_short ? UCS_OK : packed_length;
 }
 
@@ -119,12 +169,24 @@ ucs_status_t uct_ugni_udt_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t heade
     uct_ugni_udt_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ugni_udt_iface_t);
     uct_ugni_udt_ep_t *ep = ucs_derived_of(tl_ep, uct_ugni_udt_ep_t);
 
+    UCS_ASYNC_BLOCK(iface->super.super.worker->async);
+
+    uint64_t check = ((uint64_t*)payload)[0];
+    ucs_debug("check in: %lx", check);
+
+
     UCT_CHECK_LENGTH(length, iface->config.udt_seg_size - sizeof(header) -
                      sizeof(uct_ugni_udt_header_t), "am_short");
     ucs_trace_data("AM_SHORT [%p] am_id: %d buf=%p length=%u",
                    iface, id, payload, length);
-    return uct_ugni_udt_ep_am_common_send(UCT_UGNI_UDT_AM_SHORT, ep, iface, id, length,
-                                          header, payload, NULL, NULL);
+    ucs_status_t status = uct_ugni_udt_ep_am_common_send(UCT_UGNI_UDT_AM_SHORT, ep, iface, id, length,
+                                                         header, payload, NULL, NULL);
+
+    ucs_debug("check out: %lx", check);
+    ucs_assert_always(check == ((uint64_t*)payload)[0]);
+    UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
+
+    return status;
 }
 
 ssize_t uct_ugni_udt_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
@@ -134,8 +196,13 @@ ssize_t uct_ugni_udt_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
     uct_ugni_udt_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ugni_udt_iface_t);
     uct_ugni_udt_ep_t *ep = ucs_derived_of(tl_ep, uct_ugni_udt_ep_t);
 
+    UCS_ASYNC_BLOCK(iface->super.super.worker->async);
+
     ucs_trace_data("AM_BCOPY [%p] am_id: %d buf=%p",
                    iface, id, arg );
-    return uct_ugni_udt_ep_am_common_send(UCT_UGNI_UDT_AM_BCOPY, ep, iface, id, 0,
+    ucs_status_t status = uct_ugni_udt_ep_am_common_send(UCT_UGNI_UDT_AM_BCOPY, ep, iface, id, 0,
                                           0, NULL, pack_cb, arg);
+    UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
+
+    return status;
 }

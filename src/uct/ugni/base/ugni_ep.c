@@ -53,6 +53,7 @@ ucs_arbiter_cb_result_t uct_ugni_ep_process_pending(ucs_arbiter_t *arbiter,
 static ucs_arbiter_cb_result_t uct_ugni_ep_abriter_purge_cb(ucs_arbiter_t *arbiter,
                                                             ucs_arbiter_elem_t *elem,
                                                             void *arg){
+
     uct_ugni_ep_t *ep = ucs_container_of(ucs_arbiter_elem_group(elem), uct_ugni_ep_t, arb_group);
     uct_pending_req_t *req = ucs_container_of(elem, uct_pending_req_t, priv);
     uct_pending_callback_t cb = arg;
@@ -62,7 +63,7 @@ static ucs_arbiter_cb_result_t uct_ugni_ep_abriter_purge_cb(ucs_arbiter_t *arbit
     }
 
     ep->arb_size--;
-   
+
     return UCS_ARBITER_CB_RESULT_REMOVE_ELEM;
 }
 
@@ -133,6 +134,9 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ugni_ep_t)
     uct_ugni_iface_t *iface = ucs_derived_of(self->super.super.iface,
                                              uct_ugni_iface_t);
     gni_return_t ugni_rc;
+
+    ucs_arbiter_group_purge(&iface->arbiter, &self->arb_group,
+                            uct_ugni_ep_abriter_purge_cb, NULL);
 
     ugni_rc = GNI_EpDestroy(self->ep);
     if (GNI_RC_SUCCESS != ugni_rc) {

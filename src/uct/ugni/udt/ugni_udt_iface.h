@@ -11,9 +11,12 @@
 #include <uct/ugni/base/ugni_pd.h>
 #include <uct/ugni/base/ugni_device.h>
 #include <uct/ugni/base/ugni_iface.h>
+#include <ucs/datastruct/list.h>
 #include "ugni_udt_ep.h"
 
 #include <uct/base/uct_pd.h>
+#include <ucs/async/async.h>
+#include <ucs/time/timer_wheel.h>
 
 typedef void uct_ugni_udt_desc_t;
 
@@ -21,6 +24,8 @@ typedef struct uct_ugni_udt_iface {
     uct_ugni_iface_t        super;        /**< Super type */
     ucs_mpool_t             free_desc;    /**< Pool of FMA descriptors for
                                                requests without bouncing buffers */
+    ucs_mpool_t             free_queue;   /**< Pool of FMA descriptors for
+                                             requests without bouncing buffers */
     gni_ep_handle_t         ep_any;       /**< Unbound endpoint that accept any datagram
                                                messages */
     uct_ugni_udt_desc_t     *desc_any;    /**< Segment that accepts datagram from any source */
@@ -28,6 +33,15 @@ typedef struct uct_ugni_udt_iface {
         unsigned            udt_seg_size; /**< Max UDT size */
         size_t              rx_headroom;  /**< The size of user defined header for am */
     } config;
+
+    struct {
+        int               timer_id;
+        ucs_twheel_t      slow_timer;
+    } async;
+
+    ucs_queue_head_t        sync_am_events; /**< If the async handler gets an am request for a
+                                                 syncronous event, it will put it here to be
+                                                 processed later. */
 } uct_ugni_udt_iface_t;
 
 typedef struct uct_ugni_iface_config {
@@ -44,7 +58,13 @@ typedef struct uct_ugni_udt_header {
     uint8_t type;
     uint8_t am_id;
     uint8_t length;
+    uint64_t seq_id;
 } uct_ugni_udt_header_t;
+
+typedef struct {
+    uct_ugni_udt_desc_t *desc;
+    ucs_queue_elem_t queue;
+} uct_ugnu_udt_queued_am_t;
 
 #define uct_ugni_udt_get_offset(i) ((size_t)(ucs_max(sizeof(uct_ugni_udt_header_t), ((i)->config.rx_headroom  + \
                  sizeof(uct_am_recv_desc_t)))))
