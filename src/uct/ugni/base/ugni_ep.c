@@ -124,6 +124,7 @@ UCS_CLASS_INIT_FUNC(uct_ugni_ep_t, uct_iface_t *tl_iface,
     big_hash = (void *)&self->ep;
 
     self->hash_key = big_hash[0];
+    ucs_debug("Adding ep hash %x to iface %p", self->hash_key, iface);
     sglib_hashed_uct_ugni_ep_t_add(iface->eps, self);
 
     return rc;
@@ -134,6 +135,8 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ugni_ep_t)
     uct_ugni_iface_t *iface = ucs_derived_of(self->super.super.iface,
                                              uct_ugni_iface_t);
     gni_return_t ugni_rc;
+
+    ucs_debug("Removinig ep hash %x from iface %p", self->hash_key, iface);
 
     ucs_arbiter_group_purge(&iface->arbiter, &self->arb_group,
                             uct_ugni_ep_abriter_purge_cb, NULL);
