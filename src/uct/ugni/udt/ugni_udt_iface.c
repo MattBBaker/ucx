@@ -106,6 +106,7 @@ static void uct_ugni_udt_process_wildcard_datagram(uct_ugni_udt_iface_t *iface, 
         /* Allocate a new element */
         UCT_TL_IFACE_GET_TX_DESC(&iface->super.super, &iface->free_desc,
                                  new_desc, new_desc = NULL);
+        /* Queue request to be processed in a syncronous context */
         uct_ugni_udt_queue_rx_desc(iface, desc);
         /* set the new desc */
         iface->desc_any = new_desc;
@@ -136,22 +137,11 @@ void uct_ugni_udt_process_reply_datagram(uct_ugni_udt_iface_t *iface, uint64_t i
     uint32_t rem_addr,
         rem_id;
     gni_post_state_t post_state;
-
     uct_ugni_udt_ep_t *ep = ucs_derived_of(uct_ugni_iface_lookup_ep(&iface->super, id),
                                            uct_ugni_udt_ep_t);
     if (ucs_unlikely(NULL == ep)) {
         ucs_error("Can not lookup ep with id %"PRIx64,id);
-        ucs_assert_always(0);
-        /* It's possible for the other side to tear down the EP pair without waiting for a reply
-        ucs_debug("Canceling stale message");
-        ugni_rc = GNI_EpPostDataCancelById(iface->ep_any, id);
-        if (ucs_unlikely(GNI_RC_SUCCESS != ugni_rc)) {
-            ucs_error("GNI_EpPostDataCancelById, Error status: %s %d",
-                      gni_err_str[ugni_rc], ugni_rc);
-            return;
-        }
         return;
- */
     }
 
     ucs_assert_always(NULL != ep);

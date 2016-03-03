@@ -18,7 +18,6 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_udt_ep_t, uct_iface_t *tl_iface,
                            const uct_iface_addr_t *iface_addr)
 {
     UCS_CLASS_CALL_SUPER_INIT(uct_ugni_ep_t, tl_iface, dev_addr, iface_addr);
-    ucs_debug("Created new ep, address %p", self);
     self->posted_desc = NULL;
     return UCS_OK;
 }
@@ -32,19 +31,32 @@ void uct_ugni_udt_process_reply_datagram(uct_ugni_udt_iface_t *iface, uint64_t i
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ugni_udt_ep_t)
 {
-    //gni_return_t ugni_rc;
+    gni_return_t ugni_rc;
+    uint32_t rem_addr,
+        rem_id;
+    gni_post_state_t post_state;
     uct_ugni_udt_iface_t *iface = ucs_derived_of(self->super.super.super.iface, uct_ugni_udt_iface_t);
     UCS_ASYNC_BLOCK(iface->super.super.worker->async);
     if (self->posted_desc) {
-        uct_ugni_udt_process_reply_datagram(iface, self->super.hash_key, UCT_UGNI_ASYNC);
-        /*
         ugni_rc = GNI_EpPostDataCancel(self->super.ep);
         if (GNI_RC_SUCCESS != ugni_rc) {
-            ucs_debug("GNI_EpPostDataCancel failed, Error status: %s %d",
+            ucs_error("GNI_EpPostDataWaitById, Error status: %s %d",
                       gni_err_str[ugni_rc], ugni_rc);
         }
+
+        ugni_rc = GNI_EpPostDataWaitById(self->super.ep, self->super.hash_key, -1, &post_state, &rem_addr, &rem_id);
+
+        if (ucs_unlikely(GNI_RC_SUCCESS != ugni_rc)) {
+            ucs_error("GNI_EpPostDataWaitById, Error status: %s %d",
+                      gni_err_str[ugni_rc], ugni_rc);
+            return;
+        }
+
+        ucs_assert_always(GNI_POST_TERMINATED == post_state);
+
+        iface->super.outstanding--;
+        self->super.outstanding--;
         ucs_mpool_put(self->posted_desc);
-        */
     }
     UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
 }
@@ -87,8 +99,6 @@ uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, u
 
     UCT_TL_IFACE_GET_TX_DESC(&iface->super.super, &iface->free_desc,
                              desc, return UCS_ERR_NO_RESOURCE);
-
-    //ucs_debug("Ep desc allocated: %p", desc);
 
     rheader = uct_ugni_udt_get_rheader(desc, iface);
     rheader->type = UCT_UGNI_UDT_EMPTY;
