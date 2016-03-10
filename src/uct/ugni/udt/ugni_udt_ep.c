@@ -99,6 +99,7 @@ uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, u
 
     UCT_TL_IFACE_GET_TX_DESC(&iface->super.super, &iface->free_desc,
                              desc, return UCS_ERR_NO_RESOURCE);
+    ucs_debug("Got desc %p for common send.", desc);
 
     rheader = uct_ugni_udt_get_rheader(desc, iface);
     rheader->type = UCT_UGNI_UDT_EMPTY;
@@ -138,7 +139,7 @@ uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, u
     pthread_mutex_unlock(&uct_ugni_global_lock);
 
     ucs_assert_always(ugni_rc != GNI_RC_INVALID_PARAM);
-    UCT_UGNI_UDT_CHECK_RC(ugni_rc);
+    UCT_UGNI_UDT_CHECK_RC(ugni_rc, desc);
 
     ep->posted_desc = desc;
     ++ep->super.outstanding;

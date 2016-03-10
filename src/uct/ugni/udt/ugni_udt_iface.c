@@ -106,6 +106,7 @@ static void uct_ugni_udt_process_wildcard_datagram(uct_ugni_udt_iface_t *iface, 
         /* Allocate a new element */
         UCT_TL_IFACE_GET_TX_DESC(&iface->super.super, &iface->free_desc,
                                  new_desc, new_desc = NULL);
+        ucs_debug("New desc for queuing wildcard desc %p", new_desc);
         /* Queue request to be processed in a syncronous context */
         uct_ugni_udt_queue_rx_desc(iface, desc);
         /* set the new desc */
@@ -425,6 +426,7 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_udt_iface_t, uct_pd_h pd, uct_worker_h worke
 
     UCT_TL_IFACE_GET_TX_DESC(&self->super.super, &self->free_desc,
                              desc, goto clean_ep);
+    ucs_debug("First wildcard desc is %p", desc);
 
     /* Init any desc */
     self->desc_any = desc;
