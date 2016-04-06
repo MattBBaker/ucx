@@ -103,6 +103,62 @@ ucs_status_t ucp_atomic_swap32(ucp_ep_h ep, uint32_t swap, uint64_t remote_addr,
                                uct_ep_atomic_swap32, sizeof(uint32_t));
 }
 
+/*
+        uct_completion_t comp; \
+        ucs_status_t status; \
+        uct_rkey_t uct_rkey; \
+        \
+        UCP_RMA_CHECK_ATOMIC(_remote_addr, _size); \
+        uct_rkey   = UCP_RKEY_LOOKUP(_ep, _rkey, ep->amo_dst_pdi); \
+        comp.count = 2; \
+        \
+        for (;;) { \
+            status = _uct_func((_ep)->uct_eps[UCP_EP_OP_AMO], \
+                               UCS_PP_TUPLE_BREAK _params, \
+                               _remote_addr, uct_rkey, \
+                               _result, &comp); \
+            if (ucs_likely(status == UCS_OK)) { \
+                goto out; \
+            } else if (status == UCS_INPROGRESS) { \
+                goto out_wait; \
+            } else if (status != UCS_ERR_NO_RESOURCE) { \
+                return status; \
+            } \
+            ucp_worker_progress((_ep)->worker); \
+        } \
+    out_wait: \
+        do { \
+            ucp_worker_progress((_ep)->worker); \
+        } while (comp.count != 1); \
+    out: \
+        return UCS_OK; \
+ */
+/*
+ucs_status_t ucp_emulate_atomic_swap64(ucp_ep_h ep, uint64_t swap, uint64_t remote_addr,
+                                       ucp_rkey_h rkey, uint64_t *result)
+{
+    uint64_t old;
+    uint64_t temp_result_value;
+
+    ucs_status_t status;
+
+    do {
+        status = ucp_atomic_fadd64(ep, 0, remote_addr, rkey, &old);
+        if(UCS_OK != status) {
+            return status;
+        }
+
+        status = ucp_atomic_cswap64(ep, old, swap, remote_addr, rkey, &temp_result_value);
+        if(UCS_OK != status) {
+            return status;
+        }
+    } while(old != temp_result_value);
+
+    *result = old;
+
+    return UCS_OK;
+}
+*/
 ucs_status_t ucp_atomic_swap64(ucp_ep_h ep, uint64_t swap, uint64_t remote_addr,
                                ucp_rkey_h rkey, uint64_t *result)
 {

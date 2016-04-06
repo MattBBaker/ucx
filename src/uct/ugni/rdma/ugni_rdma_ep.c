@@ -47,6 +47,8 @@ static inline void uct_ugni_format_fma_amo(uct_ugni_rdma_fetch_desc_t *amo, gni_
                                            uct_completion_t *comp,
                                            uct_completion_callback_t unpack_cb, void *arg)
 {
+
+    ucs_assert_always((remote_addr & 0x7) == 0);
     if (NULL != comp) {
         amo->orig_comp_cb = comp;
         comp = &amo->tmp;

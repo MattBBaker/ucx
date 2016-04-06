@@ -260,6 +260,7 @@ out:
 
 unsigned ucp_worker_get_ep_config(ucp_worker_h worker, const ucp_rsc_index_t *rscs)
 {
+    ucs_debug("Getting a config");
     ucp_context_h context = worker->context;
     uct_iface_attr_t *iface_attr;
     uct_pd_attr_t *pd_attr;
@@ -322,8 +323,10 @@ unsigned ucp_worker_get_ep_config(ucp_worker_h worker, const ucp_rsc_index_t *rs
             (pd_attr->cap.flags & UCT_PD_FLAG_REG))
         {
             config->max_am_zcopy  = iface_attr->cap.am.max_zcopy;
+            /*
             config->max_put_zcopy = iface_attr->cap.put.max_zcopy;
             config->max_get_zcopy = iface_attr->cap.get.max_zcopy;
+            */
 
             if (context->config.ext.zcopy_thresh == UCS_CONFIG_MEMUNITS_AUTO) {
                 /* auto */
@@ -349,6 +352,7 @@ unsigned ucp_worker_get_ep_config(ucp_worker_h worker, const ucp_rsc_index_t *rs
     rsc_index = config->rscs[UCP_EP_OP_RMA];
     if (rsc_index != UCP_NULL_RESOURCE) {
         iface_attr = &worker->iface_attrs[rsc_index];
+        pd_attr     = &context->pd_attrs[context->tl_rscs[rsc_index].pd_index];
 
         if (iface_attr->cap.flags & UCT_IFACE_FLAG_PUT_SHORT) {
             config->max_put_short    = iface_attr->cap.put.max_short;
@@ -360,6 +364,35 @@ unsigned ucp_worker_get_ep_config(ucp_worker_h worker, const ucp_rsc_index_t *rs
 
         if (iface_attr->cap.flags & UCT_IFACE_FLAG_GET_BCOPY) {
             config->max_get_bcopy    = iface_attr->cap.get.max_bcopy;
+        }
+
+        if (((iface_attr->cap.flags & UCT_IFACE_FLAG_PUT_ZCOPY) ||
+             (iface_attr->cap.flags & UCT_IFACE_FLAG_GET_ZCOPY) ) &&
+            (pd_attr->cap.flags & UCT_PD_FLAG_REG))
+        {
+            ucs_debug("Fries are done.");
+            config->max_put_zcopy = iface_attr->cap.put.max_zcopy;
+            config->max_get_zcopy = iface_attr->cap.get.max_zcopy;
+
+            if (context->config.ext.zcopy_thresh == UCS_CONFIG_MEMUNITS_AUTO) {
+                /* auto */
+                zcopy_thresh = pd_attr->reg_cost.overhead / (
+                                                             (1.0 / context->config.ext.bcopy_bw) -
+                                                             (1.0 / iface_attr->bandwidth) -
+                                                             pd_attr->reg_cost.growth);
+                if (zcopy_thresh < 0) {
+                    config->zcopy_thresh      = SIZE_MAX;
+                    config->sync_zcopy_thresh = -1;
+                } else {
+                    config->zcopy_thresh      = zcopy_thresh;
+                    config->sync_zcopy_thresh = zcopy_thresh;
+                }
+
+                ucs_debug("zcopy_thresh %f", zcopy_thresh);
+            } else {
+                config->zcopy_thresh      = context->config.ext.zcopy_thresh;
+                config->sync_zcopy_thresh = context->config.ext.zcopy_thresh;
+            }
         }
     }
 
@@ -840,6 +873,7 @@ void ucp_worker_proto_print(ucp_worker_h worker, FILE *stream, const char *title
             const char *names[] = {"am_zcopy", "put_zcopy", "get_zcopy"};
             size_t     values[] = {config->max_am_zcopy, config->max_put_zcopy,
                                    config->max_get_zcopy};
+            ucs_debug("Boo");
             ucp_worker_print_config(stream, names, values, 3, "<=");
         }
 

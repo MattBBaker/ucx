@@ -105,7 +105,7 @@ static double ucp_wireup_amo_score_func(ucp_worker_h worker,
                                         uct_iface_attr_t *iface_attr,
                                         char *reason, size_t max)
 {
-    uint64_t features = worker->context->config.features;
+    //uint64_t features = worker->context->config.features;
 
     if (!ucp_wireup_check_runtime(iface_attr, reason, max)) {
         return 0.0;

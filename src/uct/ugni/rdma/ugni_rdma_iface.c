@@ -1,3 +1,4 @@
+
 /**
  * Copyright (c) UT-Battelle, LLC. 2014-2015. ALL RIGHTS RESERVED.
  * Copyright (C) Mellanox Technologies Ltd. 2001-2014.  ALL RIGHTS RESERVED.
@@ -57,6 +58,7 @@ static ucs_status_t uct_ugni_rdma_iface_query(uct_iface_h tl_iface, uct_iface_at
                                          UCT_IFACE_FLAG_GET_BCOPY      |
                                          UCT_IFACE_FLAG_GET_ZCOPY      |
                                          UCT_IFACE_FLAG_CONNECT_TO_IFACE |
+                                         UCT_IFACE_FLAG_ATOMIC_SWAP64 | // bullshit to test with
                                          UCT_IFACE_FLAG_PENDING;
 
     if(GNI_DEVICE_ARIES == iface->super.dev->type) {
@@ -93,6 +95,116 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ugni_rdma_iface_t)
 
 static UCS_CLASS_DEFINE_DELETE_FUNC(uct_ugni_rdma_iface_t, uct_iface_t);
 
+ucs_status_t ucs_empty_function_return_unsupported_abort()
+{
+    ucs_assert_always(0);
+    return UCS_ERR_UNSUPPORTED;
+}
+
+ucs_status_t uct_emulate_atomic_swap64(uct_ep_h tl_ep, uint64_t swap,
+                                       uint64_t remote_addr, uct_rkey_t rkey,
+                                       uint64_t *result, uct_completion_t *comp);
+
+typedef struct emulation_op emulation_op_t;
+
+typedef struct emulation_chain {
+    uct_completion_t super;
+    uint64_t result;
+    uint64_t operand;
+    emulation_op_t *parent;
+} emulation_comp_t;
+
+typedef struct emulation_op {
+    uint64_t remote_addr;
+    uint64_t *user_result;
+    uct_completion_t *user_comp;
+    uct_ep_h tl_ep;
+    uct_rkey_t rkey;
+    emulation_comp_t *ops;
+} emulation_op_t;
+
+void emulate_swap_finish_fadd_cb(uct_completion_t *self) {
+    emulation_comp_t *current = (emulation_comp_t *)ucs_container_of(self, emulation_comp_t, super);
+    emulation_comp_t *next = current + 1;
+    emulation_op_t *parent = current->parent;
+    ucs_debug("Finished with emulated swap fadd");
+    next->operand = current->result;
+    parent->tl_ep->iface->ops.ep_atomic_cswap64(parent->tl_ep, current->result, current->operand, parent->remote_addr, 
+                                                parent->rkey, &next->result, &next->super);
+}
+
+void emulate_swap_finish_cswap_cb(uct_completion_t *self) {
+    emulation_comp_t *current = (emulation_comp_t *)ucs_container_of(self, emulation_comp_t, super);
+    emulation_op_t *parent = current->parent;
+
+    ucs_debug("Finished with emulated swap cswap");
+
+    if(current->result != current->operand){
+        ucs_debug("Trying again.");
+        /* try again */
+        emulation_comp_t *prev = current - 1;
+        prev->super.count = 1;
+        current->super.count = 1;
+        parent->tl_ep->iface->ops.ep_atomic_fadd64(parent->tl_ep, 0, parent->remote_addr,
+                                                   parent->rkey, &prev->result, &prev->super);
+        return;
+    }
+
+    ucs_debug("Done with emulated swap");
+    *parent->user_result = current->result;
+    ucs_free(parent->ops);
+    ucs_free(parent);
+    uct_invoke_completion(parent->user_comp);
+}
+
+/*
+typedef struct emulation_chain {
+    uct_completion_t super;
+    uint64_t result;
+    uint64_t operand;
+    emulation_op_t *parent;
+} emulation_comp_t;
+
+typedef struct emulation_op {
+    uint64_t remote_addr;
+    uint64_t *user_result;
+    uct_completion_t *user_comp;
+    uct_ep_h tl_ep;
+    uct_rkey_t rkey;
+    emulation_comp_t *ops;
+} emulation_op_t;
+ */
+
+ucs_status_t uct_emulate_atomic_swap64(uct_ep_h tl_ep, uint64_t swap,
+                                       uint64_t remote_addr, uct_rkey_t rkey,
+                                       uint64_t *result, uct_completion_t *comp) {
+    emulation_op_t *new_op = ucs_malloc(sizeof(emulation_op_t));
+    new_op->ops = ucs_malloc(sizeof(emulation_comp_t) * 2);
+
+    emulation_comp_t *fadd_comp = &new_op->ops[0];
+    emulation_comp_t *cswap_comp = &new_op->ops[1];
+
+    new_op->remote_addr = remote_addr;
+    new_op->user_result = result;
+    new_op->user_comp = comp;
+    new_op->tl_ep = tl_ep;
+    new_op->rkey = rkey;
+
+    fadd_comp->super.count = 1;
+    fadd_comp->super.func = emulate_swap_finish_fadd_cb;
+    fadd_comp->operand = swap;
+    fadd_comp->parent = new_op;
+
+    cswap_comp->super.count = 1;
+    cswap_comp->super.func = emulate_swap_finish_cswap_cb;
+    cswap_comp->parent = new_op;
+
+    tl_ep->iface->ops.ep_atomic_fadd64(tl_ep, 0, remote_addr, rkey,
+                                       &fadd_comp->result, &fadd_comp->super);
+
+    return UCS_INPROGRESS;
+}
+
 uct_iface_ops_t uct_ugni_rdma_iface_ops = {
     .iface_query         = uct_ugni_rdma_iface_query,
     .iface_flush         = uct_ugni_iface_flush,
@@ -114,11 +226,12 @@ uct_iface_ops_t uct_ugni_rdma_iface_ops = {
     .ep_pending_add      = uct_ugni_ep_pending_add,
     .ep_pending_purge    = uct_ugni_ep_pending_purge,
     /* Not supported on Gemini and we overlaod it for Aries */
-    .ep_atomic_swap64    = (void*)ucs_empty_function_return_unsupported,
-    .ep_atomic_add32     = (void*)ucs_empty_function_return_unsupported,
-    .ep_atomic_fadd32    = (void*)ucs_empty_function_return_unsupported,
-    .ep_atomic_cswap32   = (void*)ucs_empty_function_return_unsupported,
-    .ep_atomic_swap32    = (void*)ucs_empty_function_return_unsupported,
+    //.ep_atomic_swap64    = (void*)ucs_empty_function_return_unsupported_abort,
+    .ep_atomic_swap64    = uct_emulate_atomic_swap64,
+    .ep_atomic_add32     = (void*)ucs_empty_function_return_unsupported_abort,
+    .ep_atomic_fadd32    = (void*)ucs_empty_function_return_unsupported_abort,
+    .ep_atomic_cswap32   = (void*)ucs_empty_function_return_unsupported_abort,
+    .ep_atomic_swap32    = (void*)ucs_empty_function_return_unsupported_abort,
     .ep_flush            = uct_ugni_ep_flush,
 };
 

@@ -102,7 +102,7 @@ UCS_CLASS_DEFINE(derived2_t, base_t);
 
 
 UCS_TEST_F(test_class, basic) {
-    derived_t *derived;
+    derived_t *derived = NULL;
     ucs_status_t status;
 
     ASSERT_EQ(0, base_init_count);

@@ -24,10 +24,13 @@ void print_proto_info(ucs_config_print_flags_t print_flags)
     }
 
     memset(&params, 0, sizeof(params));
+    /*
     params.features = UCP_FEATURE_TAG |
                       UCP_FEATURE_RMA |
                       UCP_FEATURE_AMO32 |
                       UCP_FEATURE_AMO64;
+    */
+    params.features = UCP_FEATURE_RMA;
     status = ucp_init(&params, config, &context);
     if (status != UCS_OK) {
         printf("<Failed to create UCP context>\n");
