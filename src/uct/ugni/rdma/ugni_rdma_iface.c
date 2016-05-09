@@ -59,6 +59,7 @@ static ucs_status_t uct_ugni_rdma_iface_query(uct_iface_h tl_iface, uct_iface_at
                                          UCT_IFACE_FLAG_GET_ZCOPY      |
                                          UCT_IFACE_FLAG_CONNECT_TO_IFACE |
                                          UCT_IFACE_FLAG_ATOMIC_SWAP64 | // bullshit to test with
+                                         UCT_IFACE_FLAG_ATOMIC_ADD32 |
                                          UCT_IFACE_FLAG_PENDING;
 
     if(GNI_DEVICE_ARIES == iface->super.dev->type) {
@@ -227,11 +228,11 @@ uct_iface_ops_t uct_ugni_rdma_iface_ops = {
     .ep_pending_purge    = uct_ugni_ep_pending_purge,
     /* Not supported on Gemini and we overlaod it for Aries */
     //.ep_atomic_swap64    = (void*)ucs_empty_function_return_unsupported_abort,
-    .ep_atomic_swap64    = uct_emulate_atomic_swap64,
-    .ep_atomic_add32     = (void*)ucs_empty_function_return_unsupported_abort,
-    .ep_atomic_fadd32    = (void*)ucs_empty_function_return_unsupported_abort,
-    .ep_atomic_cswap32   = (void*)ucs_empty_function_return_unsupported_abort,
-    .ep_atomic_swap32    = (void*)ucs_empty_function_return_unsupported_abort,
+    .ep_atomic_swap64    = (void*)ucs_empty_function_return_unsupported,
+    .ep_atomic_add32     = (void*)ucs_empty_function_return_unsupported,
+    .ep_atomic_fadd32    = (void*)ucs_empty_function_return_unsupported,
+    .ep_atomic_cswap32   = (void*)ucs_empty_function_return_unsupported,
+    .ep_atomic_swap32    = (void*)ucs_empty_function_return_unsupported,
     .ep_flush            = uct_ugni_ep_flush,
 };
 
