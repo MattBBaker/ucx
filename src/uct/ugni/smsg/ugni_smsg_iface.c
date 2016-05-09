@@ -385,7 +385,7 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_smsg_iface_t, uct_pd_h pd, uct_worker_h work
     pthread_mutex_lock(&uct_ugni_global_lock);
 
     UCS_CLASS_CALL_SUPER_INIT(uct_ugni_iface_t, pd, worker, dev_name, &uct_ugni_smsg_iface_ops,
-                              &config->super UCS_STATS_ARG(NULL));
+                              NULL, &config->super UCS_STATS_ARG(NULL));
 
     /* Setting initial configuration */
     self->config.smsg_seg_size = 2048;

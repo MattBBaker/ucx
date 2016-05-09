@@ -11,6 +11,8 @@
 
 #define UCT_UGNI_RDMA_TL_NAME   "ugni_rdma"
 
+typedef ucs_status_t (*flush_cb_t)(void *arg);
+
 typedef struct uct_ugni_iface {
     uct_base_iface_t        super;
     uct_ugni_device_t       *dev;
@@ -29,9 +31,10 @@ typedef struct uct_ugni_iface {
                                                               on the interface */
     bool                    activated;                   /**< nic status */
     ucs_arbiter_t           arbiter;
+    flush_cb_t              flush_cb;
 } uct_ugni_iface_t;
 
-UCS_CLASS_DECLARE(uct_ugni_iface_t, uct_pd_h, uct_worker_h, const char *, uct_iface_ops_t *, const uct_iface_config_t * UCS_STATS_ARG(ucs_stats_node_t*))
+UCS_CLASS_DECLARE(uct_ugni_iface_t, uct_pd_h, uct_worker_h, const char *, uct_iface_ops_t *, flush_cb_t flush_cb,const uct_iface_config_t * UCS_STATS_ARG(ucs_stats_node_t*))
 
 ucs_status_t uct_ugni_iface_flush(uct_iface_h tl_iface);
 ucs_status_t uct_ugni_ep_flush(uct_ep_h tl_ep);

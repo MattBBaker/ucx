@@ -28,7 +28,7 @@ static ucs_config_field_t uct_ugni_udt_iface_config_table[] = {
     {NULL}
 };
 
-static void uct_ugni_udt_progress(void *arg)
+static ucs_status_t uct_ugni_udt_progress_event(void *arg)
 {
     uint32_t rem_addr,
              rem_id;
@@ -137,6 +137,14 @@ static void uct_ugni_udt_progress(void *arg)
 
 exit:
     pthread_mutex_unlock(&uct_ugni_global_lock);
+    return UCS_OK;
+}
+
+void uct_ugni_udt_progress(void *arg)
+{
+    uct_ugni_udt_iface_t * iface = (uct_ugni_udt_iface_t *)arg;
+    uct_ugni_udt_progress_event(arg);
+    
     /* have a go a processing the pending queue */
     ucs_arbiter_dispatch(&iface->super.arbiter, 1, uct_ugni_ep_process_pending, NULL);
 }
@@ -243,7 +251,7 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_udt_iface_t, uct_pd_h pd, uct_worker_h worke
     pthread_mutex_lock(&uct_ugni_global_lock);
 
     UCS_CLASS_CALL_SUPER_INIT(uct_ugni_iface_t, pd, worker, dev_name, &uct_ugni_udt_iface_ops,
-                              &config->super UCS_STATS_ARG(NULL));
+                              uct_ugni_udt_progress_event, &config->super UCS_STATS_ARG(NULL));
 
     /* Setting initial configuration */
     self->config.udt_seg_size = GNI_DATAGRAM_MAXSIZE;
