@@ -110,7 +110,7 @@ static double ucp_wireup_amo_score_func(ucp_worker_h worker,
     if (!ucp_wireup_check_runtime(iface_attr, reason, max)) {
         return 0.0;
     }
-
+#if 0
     if (features & UCP_FEATURE_AMO32) {
         /* TODO remove this requirement once we have SW atomics */
         if (!ucs_test_all_flags(iface_attr->cap.flags,
@@ -136,7 +136,7 @@ static double ucp_wireup_amo_score_func(ucp_worker_h worker,
             return 0.0;
         }
     }
-
+#endif
     return 1e-3 / (iface_attr->latency + (iface_attr->overhead * 2));
 }
 
