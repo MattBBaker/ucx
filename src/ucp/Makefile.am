@@ -18,6 +18,7 @@ nobase_dist_libucp_la_HEADERS = \
 	api/ucp.h
 
 noinst_HEADERS = \
+	amo/emulated_amo.h \
 	core/ucp_context.h \
 	core/ucp_ep.h \
 	core/ucp_mm.h \
@@ -37,6 +38,7 @@ noinst_HEADERS = \
 
 libucp_la_SOURCES = \
 	amo/basic_amo.c \
+	amo/emulated_amo.c \
 	core/ucp_context.c \
 	core/ucp_ep.c \
 	core/ucp_mm.c \
