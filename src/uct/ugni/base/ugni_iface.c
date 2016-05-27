@@ -19,89 +19,6 @@ void uct_ugni_base_desc_key_init(uct_iface_h iface, void *obj, uct_mem_h memh)
   base->desc.local_mem_hndl = *(gni_mem_handle_t *)memh;
 }
 
-void uct_ugni_progress(void *arg)
-{
-    gni_cq_entry_t  event_data = 0;
-    gni_post_descriptor_t *event_post_desc_ptr;
-    uct_ugni_base_desc_t *desc;
-    uct_ugni_iface_t * iface = (uct_ugni_iface_t *)arg;
-    gni_return_t ugni_rc;
-
-    ugni_rc = GNI_CqGetEvent(iface->local_cq, &event_data);
-    if (GNI_RC_NOT_DONE == ugni_rc) {
-        return;
-    }
-
-    if ((GNI_RC_SUCCESS != ugni_rc && !event_data) || GNI_CQ_OVERRUN(event_data)) {
-        ucs_error("GNI_CqGetEvent falied. Error status %s %d ",
-                  gni_err_str[ugni_rc], ugni_rc);
-        return;
-    }
-
-    ugni_rc = GNI_GetCompleted(iface->local_cq, event_data, &event_post_desc_ptr);
-    if (GNI_RC_SUCCESS != ugni_rc && GNI_RC_TRANSACTION_ERROR != ugni_rc) {
-        ucs_error("GNI_GetCompleted falied. Error status %s %d %d",
-                  gni_err_str[ugni_rc], ugni_rc, GNI_RC_TRANSACTION_ERROR);
-        return;
-    }
-
-    desc = (uct_ugni_base_desc_t *)event_post_desc_ptr;
-    ucs_trace_async("Completion received on %p", desc);
-
-    if (NULL != desc->comp_cb) {
-        uct_invoke_completion(desc->comp_cb, UCS_OK);
-    }
-    --iface->outstanding;
-    --desc->ep->outstanding;
-
-    if (ucs_likely(0 == desc->not_ready_to_free)) {
-        ucs_mpool_put(desc);
-    }
-
-    /* have a go a processing the pending queue */
-    ucs_arbiter_dispatch(&iface->arbiter, 1, uct_ugni_ep_process_pending, NULL);
-    return;
-}
-
-ucs_status_t uct_ugni_iface_flush(uct_iface_h tl_iface, unsigned flags,
-                                  uct_completion_t *comp)
-{
-    uct_ugni_iface_t *iface = ucs_derived_of(tl_iface, uct_ugni_iface_t);
-
-    if (comp != NULL) {
-        return UCS_ERR_UNSUPPORTED;
-    }
-
-    if (0 == iface->outstanding) {
-        UCT_TL_IFACE_STAT_FLUSH(ucs_derived_of(tl_iface, uct_base_iface_t));
-        return UCS_OK;
-    }
-    uct_ugni_progress(iface);
-    UCT_TL_IFACE_STAT_FLUSH_WAIT(ucs_derived_of(tl_iface, uct_base_iface_t));
-    return UCS_INPROGRESS;
-}
-
-ucs_status_t uct_ugni_ep_flush(uct_ep_h tl_ep, unsigned flags,
-                               uct_completion_t *comp)
-{
-    uct_ugni_ep_t *ep = ucs_derived_of(tl_ep, uct_ugni_ep_t);
-    uct_ugni_iface_t *iface = ucs_derived_of(tl_ep->iface,
-                                           uct_ugni_iface_t);
-
-    if (comp != NULL) {
-        return UCS_ERR_UNSUPPORTED;
-    }
-
-    if (0 == ep->outstanding) {
-        UCT_TL_EP_STAT_FLUSH(ucs_derived_of(tl_ep, uct_base_ep_t));
-        return UCS_OK;
-    }
-
-    uct_ugni_progress(iface);
-    UCT_TL_EP_STAT_FLUSH_WAIT(ucs_derived_of(tl_ep, uct_base_ep_t));
-    return UCS_INPROGRESS;
-}
-
 ucs_status_t uct_ugni_query_tl_resources(uct_pd_h pd, const char *tl_name,
                                          uct_tl_resource_desc_t **resource_p,
                                          unsigned *num_resources_p)
@@ -347,9 +264,40 @@ ucs_status_t ugni_deactivate_iface(uct_ugni_iface_t *iface)
     return UCS_OK;
 }
 
+ucs_status_t uct_ugni_iface_flush(uct_iface_h tl_iface, unsigned flags,
+                                  uct_completion_t *comp)
+{
+    uct_ugni_iface_t *iface = ucs_derived_of(tl_iface, uct_ugni_iface_t);
+    if (0 == iface->outstanding) {
+        UCT_TL_IFACE_STAT_FLUSH(ucs_derived_of(tl_iface, uct_base_iface_t));
+        return UCS_OK;
+    }
+
+    iface->flush_cb(tl_iface);
+    UCT_TL_IFACE_STAT_FLUSH_WAIT(ucs_derived_of(tl_iface, uct_base_iface_t));
+    return UCS_INPROGRESS;
+}
+
+ucs_status_t uct_ugni_ep_flush(uct_ep_h tl_ep, unsigned flags,
+                               uct_completion_t *comp)
+{
+    uct_ugni_ep_t *ep = ucs_derived_of(tl_ep, uct_ugni_ep_t);
+    uct_ugni_iface_t *iface = ucs_derived_of(tl_ep->iface,
+                                           uct_ugni_iface_t);
+
+    if (0 == ep->outstanding) {
+        UCT_TL_EP_STAT_FLUSH(ucs_derived_of(tl_ep, uct_base_ep_t));
+        return UCS_OK;
+    }
+
+    iface->flush_cb(iface);
+    UCT_TL_EP_STAT_FLUSH_WAIT(ucs_derived_of(tl_ep, uct_base_ep_t));
+    return UCS_INPROGRESS;
+}
+
 UCS_CLASS_INIT_FUNC(uct_ugni_iface_t, uct_pd_h pd, uct_worker_h worker,
                            const char *dev_name, uct_iface_ops_t *uct_ugni_iface_ops,
-                           const uct_iface_config_t *tl_config
+                           flush_cb_t flush_cb, const uct_iface_config_t *tl_config
                            UCS_STATS_ARG(ucs_stats_node_t *stats_parent))
 {
   uct_ugni_device_t *dev;
@@ -366,6 +314,8 @@ UCS_CLASS_INIT_FUNC(uct_ugni_iface_t, uct_pd_h pd, uct_worker_h worker,
   self->dev      = dev;
   self->nic_addr = dev->address;
 
+  self->flush_cb = flush_cb;
+
   self->activated = false;
   self->outstanding = 0;
 
@@ -377,7 +327,8 @@ UCS_CLASS_INIT_FUNC(uct_ugni_iface_t, uct_pd_h pd, uct_worker_h worker,
 
 UCS_CLASS_DEFINE_NEW_FUNC(uct_ugni_iface_t, uct_iface_t,
                           uct_pd_h, uct_worker_h,
-                          const char*, uct_iface_ops_t *, const uct_iface_config_t * UCS_STATS_ARG(ucs_stats_node_t *));
+                          const char*, uct_iface_ops_t *, flush_cb_t,
+                          const uct_iface_config_t * UCS_STATS_ARG(ucs_stats_node_t *));
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ugni_iface_t){
 

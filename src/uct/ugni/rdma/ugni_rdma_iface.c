@@ -73,11 +73,66 @@ static ucs_status_t uct_ugni_rdma_iface_query(uct_iface_h tl_iface, uct_iface_at
     return UCS_OK;
 }
 
+static ucs_status_t uct_ugni_rdma_progress_events(void *arg)
+{
+    gni_cq_entry_t  event_data = 0;
+    gni_post_descriptor_t *event_post_desc_ptr;
+    uct_ugni_base_desc_t *desc;
+    gni_return_t ugni_rc;
+    uct_ugni_iface_t *iface = ucs_derived_of(arg, uct_ugni_iface_t);
+
+    ugni_rc = GNI_CqGetEvent(iface->local_cq, &event_data);
+    if (GNI_RC_NOT_DONE == ugni_rc) {
+        return UCS_OK;
+    }
+
+    if ((GNI_RC_SUCCESS != ugni_rc && !event_data) || GNI_CQ_OVERRUN(event_data)) {
+        ucs_error("GNI_CqGetEvent falied. Error status %s %d ",
+                  gni_err_str[ugni_rc], ugni_rc);
+        return UCS_ERR_NO_RESOURCE;
+    }
+
+    ugni_rc = GNI_GetCompleted(iface->local_cq, event_data, &event_post_desc_ptr);
+    if (GNI_RC_SUCCESS != ugni_rc && GNI_RC_TRANSACTION_ERROR != ugni_rc) {
+        ucs_error("GNI_GetCompleted falied. Error status %s %d %d",
+                  gni_err_str[ugni_rc], ugni_rc, GNI_RC_TRANSACTION_ERROR);
+        return UCS_ERR_NO_RESOURCE;
+    }
+
+    desc = (uct_ugni_base_desc_t *)event_post_desc_ptr;
+    ucs_trace_async("Completion received on %p", desc);
+
+    if (NULL != desc->comp_cb) {
+        uct_invoke_completion(desc->comp_cb, UCS_OK);
+    }
+    --iface->outstanding;
+    --desc->ep->outstanding;
+
+    if (ucs_likely(0 == desc->not_ready_to_free)) {
+        ucs_mpool_put(desc);
+    }
+
+    return UCS_INPROGRESS;
+}
+
+void uct_ugni_rdma_progress(void *arg)
+{
+    uct_ugni_iface_t *iface = (uct_ugni_iface_t *)arg;
+    ucs_status_t status;
+
+    do {
+        status = uct_ugni_rdma_progress_events(arg);
+    } while (UCS_INPROGRESS == status);
+
+    /* have a go a processing the pending queue */
+    ucs_arbiter_dispatch(&iface->arbiter, 1, uct_ugni_ep_process_pending, NULL);
+
+}
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ugni_rdma_iface_t)
 {
     uct_worker_progress_unregister(self->super.super.worker,
-                                   uct_ugni_progress, self);
+                                   uct_ugni_rdma_progress, self);
 
     if (!self->super.activated) {
         /* We done with release */
@@ -138,8 +193,8 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_rdma_iface_t, uct_pd_h pd, uct_worker_h work
 
     pthread_mutex_lock(&uct_ugni_global_lock);
 
-    UCS_CLASS_CALL_SUPER_INIT(uct_ugni_iface_t, pd, worker, dev_name, &uct_ugni_rdma_iface_ops,
-                              &config->super UCS_STATS_ARG(NULL));
+    UCS_CLASS_CALL_SUPER_INIT(uct_ugni_iface_t, pd, worker, dev_name, &uct_ugni_rdma_iface_ops, 
+                              &uct_ugni_rdma_progress_events, &config->super UCS_STATS_ARG(NULL));
 
     /* Setting initial configuration */
     self->config.fma_seg_size  = UCT_UGNI_MAX_FMA;
@@ -232,7 +287,7 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_rdma_iface_t, uct_pd_h pd, uct_worker_h work
 
     /* TBD: eventually the uct_ugni_progress has to be moved to 
      * rdma layer so each ugni layer will have own progress */
-    uct_worker_progress_register(worker, uct_ugni_progress, self);
+    uct_worker_progress_register(worker, uct_ugni_rdma_progress, self);
     pthread_mutex_unlock(&uct_ugni_global_lock);
     return UCS_OK;
 
