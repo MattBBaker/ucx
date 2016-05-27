@@ -24,13 +24,14 @@
         return UCS_ERR_INVALID_PARAM; \
     }
 
+#define _USE_ZCOPY 1
+
 ucs_status_t ucp_put(ucp_ep_h ep, const void *buffer, size_t length,
                      uint64_t remote_addr, ucp_rkey_h rkey)
 {
     ucp_ep_rma_config_t *rma_config;
     ucs_status_t status;
     uct_rkey_t uct_rkey;
-    size_t frag_length;
     ssize_t packed_len;
     uct_ep_h uct_ep;
 
@@ -40,6 +41,62 @@ ucs_status_t ucp_put(ucp_ep_h ep, const void *buffer, size_t length,
      * We re-check the configuration on every iteration, because it can be
      * changed by transport switch.
      */
+#if _USE_ZCOPY
+    ucp_ep_config_t *config;
+    ucp_lane_index_t lane;
+
+    UCP_EP_RESOLVE_RKEY(ep, rkey, rma, config, lane, uct_rkey);
+    uct_ep = ep->uct_eps[lane];
+    rma_config = &config->rma[lane];
+
+    if (length <= rma_config->max_put_short) {
+        status = uct_ep_put_short(uct_ep, buffer,
+                                  length, remote_addr,
+                                  uct_rkey);
+        ucp_worker_progress(ep->worker);
+    } else  if (length <= rma_config->max_put_bcopy) {
+        ucp_memcpy_pack_context_t pack_ctx;
+        pack_ctx.src    = buffer;
+        pack_ctx.length = length;
+        packed_len = uct_ep_put_bcopy(uct_ep,
+                                      ucp_memcpy_pack, &pack_ctx,
+                                      remote_addr, uct_rkey);
+
+        status = (packed_len > 0) ? UCS_OK : (ucs_status_t)packed_len;
+        ucp_worker_progress(ep->worker);
+    } else {
+        uct_completion_t uct_comp;
+        uct_mem_h mem;
+        uct_pd_h uct_pd = ucp_ep_pd(ep, lane);
+
+        uct_comp.count = 2;
+
+        status = uct_pd_mem_reg(uct_pd, (void*)buffer, length, &mem);
+        if (status != UCS_OK) {
+            ucs_error("failed to register user buffer: %s",
+                      ucs_status_string(status));
+        }
+        for(;;) {
+            status = uct_ep_put_zcopy(uct_ep,
+                                      buffer, length,
+                                      mem, remote_addr,
+                                      uct_rkey, &uct_comp);
+
+            ucp_worker_progress(ep->worker);
+
+            if (UCS_ERR_NO_RESOURCE == status) {
+                continue;
+            }
+
+            /* Put is completed - return success */
+            status = UCS_OK;
+            break;
+        }
+        while (1 < uct_comp.count) {
+            ucp_worker_progress(ep->worker);
+        }
+    }
+#else
     for (;;) {
         UCP_EP_RESOLVE_RKEY_RMA(ep, rkey, uct_ep, uct_rkey, rma_config);
         if (length <= rma_config->max_put_short) {
@@ -76,6 +133,7 @@ ucs_status_t ucp_put(ucp_ep_h ep, const void *buffer, size_t length,
         }
         ucp_worker_progress(ep->worker);
     }
+#endif
 
     return status;
 }
@@ -85,11 +143,26 @@ static ucs_status_t ucp_progress_put_nbi(uct_pending_req_t *self)
     ucp_request_t *req = ucs_container_of(self, ucp_request_t, send.uct);
     ucp_rkey_h rkey    = req->send.rma.rkey;
     ucp_ep_t *ep       = req->send.ep;
-    ucp_ep_rma_config_t *rma_config;
     ucs_status_t status;
     uct_rkey_t uct_rkey;
-    ssize_t packed_len;
     uct_ep_h uct_ep;
+
+    UCP_RMA_CHECK_PARAMS(req->send.buffer, req->send.length);
+
+#if _USE_ZCOPY
+    ucp_ep_config_t *config;
+    ucp_lane_index_t lane;
+
+    UCP_EP_RESOLVE_RKEY(ep, rkey, rma, config, lane, uct_rkey);
+    uct_ep = ep->uct_eps[lane];
+
+    status = uct_ep_put_zcopy(uct_ep,
+                              req->send.buffer, req->send.length,
+                              req->send.mem, req->send.rma.remote_addr,
+                              uct_rkey, NULL);
+#else
+    ucp_ep_rma_config_t *rma_config;
+    ssize_t packed_len;
 
     UCP_EP_RESOLVE_RKEY_RMA(ep, rkey, uct_ep, uct_rkey, rma_config);
     for (;;) {
@@ -130,6 +203,7 @@ static ucs_status_t ucp_progress_put_nbi(uct_pending_req_t *self)
             break;
         }
     }
+#endif
 
     return status;
 }
@@ -160,7 +234,56 @@ ucs_status_t ucp_put_nbi(ucp_ep_h ep, const void *buffer, size_t length,
     uct_ep_h uct_ep;
 
     UCP_RMA_CHECK_PARAMS(buffer, length);
+#if _USE_ZCOPY
+    ucp_ep_config_t *config;
+    ucp_lane_index_t lane;
+    uct_mem_h mem = NULL;
 
+    UCP_EP_RESOLVE_RKEY(ep, rkey, rma, config, lane, uct_rkey);
+    uct_ep = ep->uct_eps[lane];
+    rma_config = &config->rma[lane];
+    UCP_EP_RESOLVE_RKEY_RMA(ep, rkey, uct_ep, uct_rkey, rma_config);
+    if (length <= rma_config->max_put_short) {
+        status = uct_ep_put_short(uct_ep, buffer, length,
+                                  remote_addr, uct_rkey);
+    } else if (length <= rma_config->max_put_bcopy) {
+        ucp_memcpy_pack_context_t pack_ctx;
+        pack_ctx.src    = buffer;
+        pack_ctx.length = ucs_min(length, rma_config->max_put_bcopy);
+        packed_len = uct_ep_put_bcopy(uct_ep,
+                                      ucp_memcpy_pack, &pack_ctx,
+                                      remote_addr, uct_rkey);
+        status = (packed_len > 0) ? UCS_OK : (ucs_status_t)packed_len;
+    } else {
+        uct_pd_h uct_pd = ucp_ep_pd(ep, lane);
+
+        status = uct_pd_mem_reg(uct_pd, (void*)buffer, length, &mem);
+        if (status != UCS_OK) {
+            ucs_error("failed to register user buffer: %s",
+                      ucs_status_string(status));
+        }
+
+        status = uct_ep_put_zcopy(uct_ep,
+                                  buffer, length,
+                                  mem, remote_addr,
+                                  uct_rkey, NULL);
+
+    }
+
+    if (ucs_unlikely(UCS_ERR_NO_RESOURCE == status)) {
+        req = ucs_mpool_get_inline(&ep->worker->req_mp);
+        if (req == NULL) {
+            return UCS_ERR_NO_MEMORY;
+        }
+
+        req->send.mem = mem;
+
+        ucp_add_pending_rma(req, ep, uct_ep, buffer, length, remote_addr, rkey,
+                            ucp_progress_put_nbi);
+
+        status = UCS_INPROGRESS;
+    }
+#else
     for (;;) {
         UCP_EP_RESOLVE_RKEY_RMA(ep, rkey, uct_ep, uct_rkey, rma_config);
         if (length <= rma_config->max_put_short) {
@@ -226,6 +349,7 @@ ucs_status_t ucp_put_nbi(ucp_ep_h ep, const void *buffer, size_t length,
             }
         }
     }
+#endif
 
     return status;
 }
@@ -237,13 +361,52 @@ ucs_status_t ucp_get(ucp_ep_h ep, void *buffer, size_t length,
     uct_completion_t comp;
     ucs_status_t status;
     uct_rkey_t uct_rkey;
-    size_t frag_length;
     uct_ep_h uct_ep;
 
     UCP_RMA_CHECK_PARAMS(buffer, length);
 
     comp.count = 1;
+#if _USE_ZCOPY
+    ucp_ep_config_t *config;
+    ucp_lane_index_t lane;
+retry:
+    UCP_EP_RESOLVE_RKEY(ep, rkey, rma, config, lane, uct_rkey);
+    uct_ep = ep->uct_eps[lane];
+    rma_config = &config->rma[lane];
 
+    if (length <= rma_config->max_get_bcopy) {
+        status = uct_ep_get_bcopy(uct_ep,
+                                  (uct_unpack_callback_t)memcpy,
+                                  (void *)buffer, length,
+                                  remote_addr,
+                                  uct_rkey, &comp);
+        if (status == UCS_INPROGRESS) {
+            ++comp.count;
+        } else if (status == UCS_ERR_NO_RESOURCE) {
+            ucp_worker_progress(ep->worker);
+            goto retry;
+        } else if (ucs_unlikely(status != UCS_OK)) {
+            return status;
+        }
+    } else {
+        uct_pd_h uct_pd = ucp_ep_pd(ep, lane);
+        uct_mem_h mem;
+
+        status = uct_pd_mem_reg(uct_pd, (void*)buffer, length, &mem);
+        if (status != UCS_OK) {
+            ucs_error("failed to register user buffer: %s",
+                      ucs_status_string(status));
+        }
+
+        comp.count = 2;
+
+            status = uct_ep_get_zcopy(uct_ep, buffer,
+                                      length,
+                                      mem, remote_addr,
+                                      uct_rkey, &comp);
+
+    }
+#else
     for (;;) {
         UCP_EP_RESOLVE_RKEY_RMA(ep, rkey, uct_ep, uct_rkey, rma_config);
 
@@ -276,6 +439,7 @@ posted:
 retry:
         ucp_worker_progress(ep->worker);
     }
+#endif
 
     /* coverity[loop_condition] */
     while (comp.count > 1) {
@@ -289,11 +453,29 @@ static ucs_status_t ucp_progress_get_nbi(uct_pending_req_t *self)
     ucp_request_t *req = ucs_container_of(self, ucp_request_t, send.uct);
     ucp_rkey_h rkey    = req->send.rma.rkey;
     ucp_ep_t *ep       = req->send.ep;
-    ucp_ep_rma_config_t *rma_config;
     ucs_status_t status;
     uct_rkey_t uct_rkey;
-    size_t frag_length;
     uct_ep_h uct_ep;
+
+#if _USE_ZCOPY
+    ucp_ep_config_t *config;
+    ucp_lane_index_t lane;
+
+    UCP_EP_RESOLVE_RKEY(ep, rkey, rma, config, lane, uct_rkey);
+    uct_ep = ep->uct_eps[lane];
+
+    status = uct_ep_get_zcopy(uct_ep, (void *)req->send.buffer,
+                              req->send.length,
+                              req->send.mem, req->send.rma.remote_addr,
+                              uct_rkey, NULL);
+
+    if (ucs_likely(status == UCS_OK || status == UCS_INPROGRESS)) {
+        ucp_request_complete(req, void);
+        status = UCS_OK;
+    }
+
+#else
+    ucp_ep_rma_config_t *rma_config;
 
     UCP_EP_RESOLVE_RKEY_RMA(ep, rkey, uct_ep, uct_rkey, rma_config);
     for (;;) {
@@ -321,6 +503,7 @@ static ucs_status_t ucp_progress_get_nbi(uct_pending_req_t *self)
             break;
         }
     }
+#endif
 
     return status;
 }
@@ -331,11 +514,68 @@ ucs_status_t ucp_get_nbi(ucp_ep_h ep, void *buffer, size_t length,
     ucp_ep_rma_config_t *rma_config;
     ucs_status_t status;
     uct_rkey_t uct_rkey;
-    size_t frag_length;
     uct_ep_h uct_ep;
 
     UCP_RMA_CHECK_PARAMS(buffer, length);
+#if _USE_ZCOPY
+    ucp_ep_config_t *config;
+    ucp_lane_index_t lane;
 
+    UCP_EP_RESOLVE_RKEY(ep, rkey, rma, config, lane, uct_rkey);
+    uct_ep = ep->uct_eps[lane];
+    rma_config = &config->rma[lane];
+
+    uct_completion_t comp;
+
+    if (length < rma_config->max_get_bcopy) {
+        status = uct_ep_get_bcopy(uct_ep,
+                                  (uct_unpack_callback_t)memcpy,
+                                  (void*)buffer,
+                                  length,
+                                  remote_addr,
+                                  uct_rkey,
+                                  NULL);
+        if (ucs_unlikely(UCS_ERR_NO_RESOURCE == status)) {
+            ucp_request_t *req;
+            req = ucs_mpool_get_inline(&ep->worker->req_mp);
+            if (req == NULL) {
+                /* can't allocate memory for request - abort */
+                return UCS_ERR_NO_MEMORY;
+            }
+            ucp_add_pending_rma(req, ep, uct_ep, buffer, length, remote_addr,
+                                rkey, ucp_progress_get_nbi);
+            status = UCS_INPROGRESS;
+        }
+    } else {
+        uct_pd_h uct_pd = ucp_ep_pd(ep, lane);
+        uct_mem_h mem;
+
+        status = uct_pd_mem_reg(uct_pd, (void*)buffer, length, &mem);
+        if (status != UCS_OK) {
+            ucs_error("failed to register user buffer: %s",
+                      ucs_status_string(status));
+            return status;
+        }
+        comp.count = 2;
+            status = uct_ep_get_zcopy(uct_ep, buffer,
+                                      length,
+                                      mem, remote_addr,
+                                      uct_rkey, &comp);
+
+            if (ucs_unlikely(UCS_ERR_NO_RESOURCE == status)) {
+                ucp_request_t *req;
+                req = ucs_mpool_get_inline(&ep->worker->req_mp);
+                if (req == NULL) {
+                    /* can't allocate memory for request - abort */
+                    return UCS_ERR_NO_MEMORY;
+                }
+                req->send.mem = mem;
+                ucp_add_pending_rma(req, ep, uct_ep, buffer, length, remote_addr,
+                                    rkey, ucp_progress_get_nbi);
+                status = UCS_INPROGRESS;
+            }
+    }
+#else
     for (;;) {
         UCP_EP_RESOLVE_RKEY_RMA(ep, rkey, uct_ep, uct_rkey, rma_config);
         frag_length = ucs_min(rma_config->max_get_bcopy, length);
@@ -374,6 +614,7 @@ ucs_status_t ucp_get_nbi(ucp_ep_h ep, void *buffer, size_t length,
             break;
         }
     }
+#endif
 
     return status;
 }
