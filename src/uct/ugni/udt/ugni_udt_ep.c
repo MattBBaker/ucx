@@ -22,16 +22,43 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_udt_ep_t, uct_iface_t *tl_iface,
     return UCS_OK;
 }
 
+typedef enum {
+    UCT_UGNI_SYNC,
+    UCT_UGNI_ASYNC,
+} async_status_t;
+
+void uct_ugni_udt_process_reply_datagram(uct_ugni_udt_iface_t *iface, uint64_t id, async_status_t is_async);
+
 static UCS_CLASS_CLEANUP_FUNC(uct_ugni_udt_ep_t)
 {
     gni_return_t ugni_rc;
+    uint32_t rem_addr,
+        rem_id;
+    gni_post_state_t post_state;
+    uct_ugni_udt_iface_t *iface = ucs_derived_of(self->super.super.super.iface, uct_ugni_udt_iface_t);
+    UCS_ASYNC_BLOCK(iface->super.super.worker->async);
     if (self->posted_desc) {
         ugni_rc = GNI_EpPostDataCancel(self->super.ep);
         if (GNI_RC_SUCCESS != ugni_rc) {
-            ucs_debug("GNI_EpPostDataCancel failed, Error status: %s %d",
+            ucs_error("GNI_EpPostDataWaitById, Error status: %s %d",
                       gni_err_str[ugni_rc], ugni_rc);
         }
+
+        ugni_rc = GNI_EpPostDataWaitById(self->super.ep, self->super.hash_key, -1, &post_state, &rem_addr, &rem_id);
+
+        if (ucs_unlikely(GNI_RC_SUCCESS != ugni_rc)) {
+            ucs_error("GNI_EpPostDataWaitById, Error status: %s %d",
+                      gni_err_str[ugni_rc], ugni_rc);
+            return;
+        }
+
+        ucs_assert_always(GNI_POST_TERMINATED == post_state);
+
+        iface->super.outstanding--;
+        self->super.outstanding--;
+        ucs_mpool_put(self->posted_desc);
     }
+    UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
 }
 
 UCS_CLASS_DEFINE(uct_ugni_udt_ep_t, uct_ugni_ep_t);
@@ -50,6 +77,8 @@ enum {
  * 0 - perform am bcopy sending
  */
 
+uint64_t seq_id = 0;
+
 static UCS_F_ALWAYS_INLINE ssize_t
 uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, uct_ugni_udt_iface_t *iface,
                                uint8_t am_id, unsigned length, uint64_t header,
@@ -67,8 +96,10 @@ uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, u
         UCT_TL_IFACE_STAT_TX_NO_RES(&iface->super.super);
         return UCS_ERR_NO_RESOURCE;
     }
+
     UCT_TL_IFACE_GET_TX_DESC(&iface->super.super, &iface->free_desc,
                              desc, return UCS_ERR_NO_RESOURCE);
+    ucs_debug("Got desc %p for common send.", desc);
 
     rheader = uct_ugni_udt_get_rheader(desc, iface);
     rheader->type = UCT_UGNI_UDT_EMPTY;
@@ -79,6 +110,7 @@ uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, u
         uint64_t *hdr = (uint64_t *)uct_ugni_udt_get_spayload(desc, iface);
         *hdr = header;
         memcpy((void*)(hdr + 1), payload, length);
+
         sheader->length = length + sizeof(header);
         msg_length = sheader->length + sizeof(*sheader);
         UCT_TL_EP_STAT_OP(ucs_derived_of(ep, uct_base_ep_t), AM, SHORT, sizeof(header) + length);
@@ -105,11 +137,14 @@ uct_ugni_udt_ep_am_common_send(const unsigned is_short, uct_ugni_udt_ep_t *ep, u
                                 rheader, (uint16_t)iface->config.udt_seg_size,
                                 ep->super.hash_key);
     pthread_mutex_unlock(&uct_ugni_global_lock);
-    UCT_UGNI_UDT_CHECK_RC(ugni_rc);
+
+    ucs_assert_always(ugni_rc != GNI_RC_INVALID_PARAM);
+    UCT_UGNI_UDT_CHECK_RC(ugni_rc, desc);
 
     ep->posted_desc = desc;
     ++ep->super.outstanding;
     ++iface->super.outstanding;
+
     return is_short ? UCS_OK : packed_length;
 }
 
@@ -119,12 +154,18 @@ ucs_status_t uct_ugni_udt_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t heade
     uct_ugni_udt_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ugni_udt_iface_t);
     uct_ugni_udt_ep_t *ep = ucs_derived_of(tl_ep, uct_ugni_udt_ep_t);
 
+    UCS_ASYNC_BLOCK(iface->super.super.worker->async);
+
     UCT_CHECK_LENGTH(length, iface->config.udt_seg_size - sizeof(header) -
                      sizeof(uct_ugni_udt_header_t), "am_short");
     ucs_trace_data("AM_SHORT [%p] am_id: %d buf=%p length=%u",
                    iface, id, payload, length);
-    return uct_ugni_udt_ep_am_common_send(UCT_UGNI_UDT_AM_SHORT, ep, iface, id, length,
-                                          header, payload, NULL, NULL);
+    ucs_status_t status = uct_ugni_udt_ep_am_common_send(UCT_UGNI_UDT_AM_SHORT, ep, iface, id, length,
+                                                         header, payload, NULL, NULL);
+
+    UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
+
+    return status;
 }
 
 ssize_t uct_ugni_udt_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
@@ -134,8 +175,13 @@ ssize_t uct_ugni_udt_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
     uct_ugni_udt_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ugni_udt_iface_t);
     uct_ugni_udt_ep_t *ep = ucs_derived_of(tl_ep, uct_ugni_udt_ep_t);
 
+    UCS_ASYNC_BLOCK(iface->super.super.worker->async);
+
     ucs_trace_data("AM_BCOPY [%p] am_id: %d buf=%p",
                    iface, id, arg );
-    return uct_ugni_udt_ep_am_common_send(UCT_UGNI_UDT_AM_BCOPY, ep, iface, id, 0,
+    ucs_status_t status = uct_ugni_udt_ep_am_common_send(UCT_UGNI_UDT_AM_BCOPY, ep, iface, id, 0,
                                           0, NULL, pack_cb, arg);
+    UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
+
+    return status;
 }

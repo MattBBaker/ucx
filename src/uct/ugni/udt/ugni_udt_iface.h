@@ -11,9 +11,12 @@
 #include <uct/ugni/base/ugni_pd.h>
 #include <uct/ugni/base/ugni_device.h>
 #include <uct/ugni/base/ugni_iface.h>
+#include <ucs/datastruct/list.h>
 #include "ugni_udt_ep.h"
 
 #include <uct/base/uct_pd.h>
+#include <ucs/async/async.h>
+#include <ucs/time/timer_wheel.h>
 
 typedef void uct_ugni_udt_desc_t;
 
@@ -21,6 +24,8 @@ typedef struct uct_ugni_udt_iface {
     uct_ugni_iface_t        super;        /**< Super type */
     ucs_mpool_t             free_desc;    /**< Pool of FMA descriptors for
                                                requests without bouncing buffers */
+    ucs_mpool_t             free_queue;   /**< Pool of FMA descriptors for
+                                             requests without bouncing buffers */
     gni_ep_handle_t         ep_any;       /**< Unbound endpoint that accept any datagram
                                                messages */
     uct_ugni_udt_desc_t     *desc_any;    /**< Segment that accepts datagram from any source */
@@ -28,6 +33,15 @@ typedef struct uct_ugni_udt_iface {
         unsigned            udt_seg_size; /**< Max UDT size */
         size_t              rx_headroom;  /**< The size of user defined header for am */
     } config;
+
+    struct {
+        int               timer_id;
+        ucs_twheel_t      slow_timer;
+    } async;
+
+    ucs_queue_head_t        sync_am_events; /**< If the async handler gets an am request for a
+                                                 syncronous event, it will put it here to be
+                                                 processed later. */
 } uct_ugni_udt_iface_t;
 
 typedef struct uct_ugni_iface_config {
@@ -46,6 +60,11 @@ typedef struct uct_ugni_udt_header {
     uint8_t length;
 } uct_ugni_udt_header_t;
 
+typedef struct {
+    uct_ugni_udt_desc_t *desc;
+    ucs_queue_elem_t queue;
+} uct_ugnu_udt_queued_am_t;
+
 #define uct_ugni_udt_get_offset(i) ((size_t)(ucs_max(sizeof(uct_ugni_udt_header_t), ((i)->config.rx_headroom  + \
                  sizeof(uct_am_recv_desc_t)))))
 
@@ -58,15 +77,17 @@ typedef struct uct_ugni_udt_header {
 #define uct_ugni_udt_get_spayload(d, i) (uct_ugni_udt_get_sheader(d, i) + 1)
 #define uct_ugni_udt_get_user_desc(d, i) ((char *)uct_ugni_udt_get_rpayload(d, i) - (i)->config.rx_headroom)
 
-#define UCT_UGNI_UDT_CHECK_RC(rc)                                      \
+#define UCT_UGNI_UDT_CHECK_RC(rc, desc)                            \
 if (ucs_unlikely(GNI_RC_SUCCESS != rc)) {                          \
     if(GNI_RC_ERROR_RESOURCE == rc || GNI_RC_ERROR_NOMEM == rc) {  \
         ucs_debug("GNI_EpPostDataWId failed, Error status: %s %d", \
                   gni_err_str[rc], rc);                            \
+        ucs_mpool_put(desc);                                       \
         return UCS_ERR_NO_RESOURCE;                                \
     } else {                                                       \
         ucs_error("GNI_EpPostDataWId failed, Error status: %s %d", \
                   gni_err_str[rc], rc);                            \
+        ucs_mpool_put(desc);                                       \
         return UCS_ERR_IO_ERROR;                                   \
     }                                                              \
 }
@@ -91,7 +112,7 @@ static inline int uct_ugni_udt_ep_any_post(uct_ugni_udt_iface_t *iface)
                                 uct_ugni_udt_get_rheader(iface->desc_any, iface),
                                 iface->config.udt_seg_size,
                                 UCT_UGNI_UDT_ANY);
-    UCT_UGNI_UDT_CHECK_RC(ugni_rc);
+    UCT_UGNI_UDT_CHECK_RC(ugni_rc, iface->desc_any);
     return UCS_OK;
 }
 

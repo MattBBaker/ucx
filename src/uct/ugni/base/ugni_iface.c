@@ -382,6 +382,7 @@ UCS_CLASS_DEFINE_NEW_FUNC(uct_ugni_iface_t, uct_iface_t,
 static UCS_CLASS_CLEANUP_FUNC(uct_ugni_iface_t){
 
     ugni_deactivate_iface(self);
+    ucs_arbiter_cleanup(&self->arbiter);
 }
 
 UCS_CLASS_DEFINE(uct_ugni_iface_t, uct_base_iface_t);
