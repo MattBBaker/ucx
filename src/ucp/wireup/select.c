@@ -124,6 +124,7 @@ static double ucp_wireup_amo_score_func(ucp_worker_h worker,
 
     if (features & UCP_FEATURE_AMO32) {
         /* TODO remove this requirement once we have SW atomics */
+        /*
         if (!ucs_test_all_flags(iface_attr->cap.flags,
                                 UCT_IFACE_FLAG_ATOMIC_ADD32 |
                                 UCT_IFACE_FLAG_ATOMIC_FADD32 |
@@ -133,10 +134,12 @@ static double ucp_wireup_amo_score_func(ucp_worker_h worker,
             strncpy(reason, "all 32-bit atomics", max);
             return 0.0;
         }
+        */
     }
 
     if (features & UCP_FEATURE_AMO64) {
         /* TODO remove this requirement once we have SW atomics */
+        /*
         if (!ucs_test_all_flags(iface_attr->cap.flags,
                                 UCT_IFACE_FLAG_ATOMIC_ADD64 |
                                 UCT_IFACE_FLAG_ATOMIC_FADD64 |
@@ -146,6 +149,7 @@ static double ucp_wireup_amo_score_func(ucp_worker_h worker,
             strncpy(reason, "all 64-bit atomics", max);
             return 0.0;
         }
+        */
     }
 
     return 1e-3 / (iface_attr->latency + (iface_attr->overhead * 2));

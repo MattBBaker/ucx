@@ -4,6 +4,8 @@
 * See file LICENSE for terms.
 */
 
+#include "emulated_amo.h"
+
 #include <ucp/core/ucp_mm.h>
 #include <ucp/core/ucp_ep.inl>
 #include <ucs/sys/preprocessor.h>
@@ -71,8 +73,11 @@
 ucs_status_t ucp_atomic_add32(ucp_ep_h ep, uint32_t add,
                               uint64_t remote_addr, ucp_rkey_h rkey)
 {
+    return ucp_emulate_atomic_add32(ep, add, remote_addr, rkey);
+    /*
     UCP_AMO_WITHOUT_RESULT(ep, add, remote_addr, rkey,
                            uct_ep_atomic_add32, sizeof(uint32_t));
+    */
 }
 
 ucs_status_t ucp_atomic_add64(ucp_ep_h ep, uint64_t add,
@@ -85,8 +90,11 @@ ucs_status_t ucp_atomic_add64(ucp_ep_h ep, uint64_t add,
 ucs_status_t ucp_atomic_fadd32(ucp_ep_h ep, uint32_t add, uint64_t remote_addr,
                                ucp_rkey_h rkey, uint32_t *result)
 {
+    return ucp_emulate_atomic_fadd32(ep, add, remote_addr, rkey, result);
+    /*
     UCP_AMO_WITH_RESULT(ep, (add), remote_addr, rkey, result,
                         uct_ep_atomic_fadd32, sizeof(uint32_t));
+    */
 }
 
 ucs_status_t ucp_atomic_fadd64(ucp_ep_h ep, uint64_t add, uint64_t remote_addr,
@@ -99,22 +107,31 @@ ucs_status_t ucp_atomic_fadd64(ucp_ep_h ep, uint64_t add, uint64_t remote_addr,
 ucs_status_t ucp_atomic_swap32(ucp_ep_h ep, uint32_t swap, uint64_t remote_addr,
                                ucp_rkey_h rkey, uint32_t *result)
 {
+    return ucp_emulate_atomic_swap32(ep, swap, remote_addr, rkey, result);
+    /*
     UCP_AMO_WITH_RESULT(ep, (swap), remote_addr, rkey, result,
                                uct_ep_atomic_swap32, sizeof(uint32_t));
+    */
 }
 
 ucs_status_t ucp_atomic_swap64(ucp_ep_h ep, uint64_t swap, uint64_t remote_addr,
                                ucp_rkey_h rkey, uint64_t *result)
 {
+    return ucp_emulate_atomic_swap64(ep, swap, remote_addr, rkey, result);
+    /*
     UCP_AMO_WITH_RESULT(ep, (swap), remote_addr, rkey, result,
                         uct_ep_atomic_swap64, sizeof(uint64_t));
+    */
 }
 
 ucs_status_t ucp_atomic_cswap32(ucp_ep_h ep, uint32_t compare, uint32_t swap,
                                 uint64_t remote_addr, ucp_rkey_h rkey, uint32_t *result)
 {
+    return ucp_emulate_atomic_cswap32(ep, compare, swap, remote_addr, rkey, result);
+    /*
     UCP_AMO_WITH_RESULT(ep, (compare, swap), remote_addr, rkey, result,
                         uct_ep_atomic_cswap32, sizeof(uint32_t));
+    */
 }
 
 ucs_status_t ucp_atomic_cswap64(ucp_ep_h ep, uint64_t compare, uint64_t swap,
