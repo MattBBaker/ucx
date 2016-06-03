@@ -54,4 +54,8 @@ ucs_status_t uct_ugni_ep_get_bcopy(uct_ep_h tl_ep,
 ucs_status_t uct_ugni_ep_get_zcopy(uct_ep_h tl_ep, void *buffer, size_t length,
                                    uct_mem_h memh, uint64_t remote_addr,
                                    uct_rkey_t rkey, uct_completion_t *comp);
+
+typedef struct uct_ugni_rdma_ep {
+    uct_ugni_ep_t super;
+} uct_ugni_rdma_ep_t;
 #endif

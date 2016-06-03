@@ -17,6 +17,8 @@
 #define UCT_UGNI_MAX_FMA     (2048)
 #define UCT_UGNI_MAX_RDMA    (512*1024*1024);
 
+void uct_ugni_rdma_progress(void *arg);
+
 struct uct_ugni_iface;
 
 typedef struct uct_ugni_rdma_iface {

@@ -131,8 +131,10 @@ void uct_ugni_rdma_progress(void *arg)
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ugni_rdma_iface_t)
 {
+    /*
     uct_worker_progress_unregister(self->super.super.worker,
                                    uct_ugni_rdma_progress, self);
+    */
 
     if (!self->super.activated) {
         /* We done with release */
@@ -147,6 +149,9 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ugni_rdma_iface_t)
 }
 
 static UCS_CLASS_DEFINE_DELETE_FUNC(uct_ugni_rdma_iface_t, uct_iface_t);
+UCS_CLASS_DECLARE_NEW_FUNC(uct_ugni_rdma_ep_t, uct_ep_t, uct_iface_t*,
+                           const uct_device_addr_t*, const uct_iface_addr_t*);
+UCS_CLASS_DECLARE_DELETE_FUNC(uct_ugni_rdma_ep_t, uct_ep_t);
 
 uct_iface_ops_t uct_ugni_rdma_iface_ops = {
     .iface_query         = uct_ugni_rdma_iface_query,
@@ -155,8 +160,8 @@ uct_iface_ops_t uct_ugni_rdma_iface_ops = {
     .iface_get_address   = uct_ugni_iface_get_address,
     .iface_get_device_address = (void*)ucs_empty_function_return_success,
     .iface_is_reachable  = uct_ugni_iface_is_reachable,
-    .ep_create_connected = UCS_CLASS_NEW_FUNC_NAME(uct_ugni_ep_t),
-    .ep_destroy          = UCS_CLASS_DELETE_FUNC_NAME(uct_ugni_ep_t),
+    .ep_create_connected = UCS_CLASS_NEW_FUNC_NAME(uct_ugni_rdma_ep_t),
+    .ep_destroy          = UCS_CLASS_DELETE_FUNC_NAME(uct_ugni_rdma_ep_t),
     .ep_put_short        = uct_ugni_ep_put_short,
     .ep_put_bcopy        = uct_ugni_ep_put_bcopy,
     .ep_put_zcopy        = uct_ugni_ep_put_zcopy,
@@ -287,7 +292,7 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_rdma_iface_t, uct_pd_h pd, uct_worker_h work
 
     /* TBD: eventually the uct_ugni_progress has to be moved to 
      * rdma layer so each ugni layer will have own progress */
-    uct_worker_progress_register(worker, uct_ugni_rdma_progress, self);
+    //uct_worker_progress_register(worker, uct_ugni_rdma_progress, self);
     pthread_mutex_unlock(&uct_ugni_global_lock);
     return UCS_OK;
 
