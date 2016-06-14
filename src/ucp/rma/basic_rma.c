@@ -95,6 +95,8 @@ ucs_status_t ucp_put(ucp_ep_h ep, const void *buffer, size_t length,
         while (1 < uct_comp.count) {
             ucp_worker_progress(ep->worker);
         }
+        /* ucs_status_t uct_md_mem_dereg(uct_md_h md, uct_mem_h memh) */
+        uct_pd_mem_dereg(uct_pd, mem);
     }
 #else
     for (;;) {
@@ -366,6 +368,9 @@ ucs_status_t ucp_get(ucp_ep_h ep, void *buffer, size_t length,
     UCP_RMA_CHECK_PARAMS(buffer, length);
 
     comp.count = 1;
+    uct_pd_h uct_pd = NULL;
+    uct_mem_h mem = NULL;
+
 #if _USE_ZCOPY
     ucp_ep_config_t *config;
     ucp_lane_index_t lane;
@@ -389,9 +394,7 @@ retry:
             return status;
         }
     } else {
-        uct_pd_h uct_pd = ucp_ep_pd(ep, lane);
-        uct_mem_h mem;
-
+        uct_pd = ucp_ep_pd(ep, lane);
         status = uct_pd_mem_reg(uct_pd, (void*)buffer, length, &mem);
         if (status != UCS_OK) {
             ucs_error("failed to register user buffer: %s",
@@ -445,6 +448,11 @@ retry:
     while (comp.count > 1) {
         ucp_worker_progress(ep->worker);
     }
+
+    if(length > rma_config->max_get_bcopy) {
+        uct_pd_mem_dereg(uct_pd, mem);
+    }
+
     return UCS_OK;
 }
 
@@ -621,7 +629,7 @@ ucs_status_t ucp_get_nbi(ucp_ep_h ep, void *buffer, size_t length,
 
 ucs_status_t ucp_worker_fence(ucp_worker_h worker)
 {
-    return UCS_ERR_UNSUPPORTED;
+    return ucp_worker_flush(worker);
 }
 
 ucs_status_t ucp_worker_flush(ucp_worker_h worker)
