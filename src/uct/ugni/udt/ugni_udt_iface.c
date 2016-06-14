@@ -295,6 +295,7 @@ static ucs_status_t uct_ugni_udt_iface_query(uct_iface_h tl_iface, uct_iface_att
     return UCS_OK;
 }
 
+#if 0
 static void uct_ugni_udt_iface_timer(void *arg){
     uct_ugni_udt_iface_t *iface = (uct_ugni_udt_iface_t *)arg;
     ucs_time_t now;
@@ -307,11 +308,12 @@ static void uct_ugni_udt_iface_timer(void *arg){
     ucs_arbiter_dispatch(&iface->super.arbiter, 1, uct_ugni_ep_process_pending, NULL);
     UCS_ASYNC_UNBLOCK(iface->super.super.worker->async);
 }
+#endif
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ugni_udt_iface_t)
 {
     gni_return_t ugni_rc;
-    ucs_status_t status;
+    //ucs_status_t status;
 
     uct_worker_progress_unregister(self->super.super.worker,
                                    uct_ugni_udt_progress, self);
@@ -321,8 +323,8 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ugni_udt_iface_t)
     }
 
     UCS_ASYNC_BLOCK(self->super.super.worker->async);
-    status = ucs_async_remove_timer(self->async.timer_id);
-    ucs_assert_always(UCS_OK == status);
+    //status = ucs_async_remove_timer(self->async.timer_id);
+    //ucs_assert_always(UCS_OK == status);
     ucs_twheel_cleanup(&self->async.slow_timer);
     ugni_rc = GNI_EpPostDataCancel(self->ep_any);
     if (GNI_RC_SUCCESS != ugni_rc) {
@@ -451,13 +453,13 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_udt_iface_t, uct_pd_h pd, uct_worker_h worke
     if (UCS_OK != status) {
         goto clean_ep;
     }
-
+    /*
     status = ucs_async_add_timer(self->super.super.worker->async->mode,
                                  uct_ugni_udt_slow_tick(),
                                  uct_ugni_udt_iface_timer, self,
                                  self->super.super.worker->async,
                                  &self->async.timer_id);
-
+    */
 
     /* TBD: eventually the uct_ugni_progress has to be moved to
      * udt layer so each ugni layer will have own progress */

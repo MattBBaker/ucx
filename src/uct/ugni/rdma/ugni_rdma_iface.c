@@ -17,7 +17,7 @@
 
 static ucs_config_field_t uct_ugni_rdma_iface_config_table[] = {
     /* This tuning controls the allocation priorities for bouncing buffers */
-    { "", "MAX_SHORT=2048;MAX_BCOPY=2048;ALLOC=huge,mmap,heap", NULL,
+    { "", "MAX_SHORT=65536;MAX_BCOPY=65536;ALLOC=huge,mmap,heap", NULL,
     ucs_offsetof(uct_ugni_rdma_iface_config_t, super), UCS_CONFIG_TYPE_TABLE(uct_iface_config_table)},
 
     UCT_IFACE_MPOOL_CONFIG_FIELDS("RDMA", -1, 0, "rdma",
@@ -72,8 +72,8 @@ static ucs_status_t uct_ugni_rdma_iface_query(uct_iface_h tl_iface, uct_iface_at
     iface_attr->bandwidth              = 6911 * pow(1024,2); /* bytes */
     return UCS_OK;
 }
-
-static ucs_status_t uct_ugni_rdma_progress_events(void *arg)
+#if 0
+static inline ucs_status_t uct_ugni_rdma_progress_events(void *arg)
 {
     gni_cq_entry_t  event_data = 0;
     gni_post_descriptor_t *event_post_desc_ptr;
@@ -115,7 +115,7 @@ static ucs_status_t uct_ugni_rdma_progress_events(void *arg)
     return UCS_INPROGRESS;
 }
 
-void uct_ugni_rdma_progress(void *arg)
+static void uct_ugni_rdma_progress(void *arg)
 {
     uct_ugni_iface_t *iface = (uct_ugni_iface_t *)arg;
     ucs_status_t status;
@@ -128,7 +128,7 @@ void uct_ugni_rdma_progress(void *arg)
     ucs_arbiter_dispatch(&iface->arbiter, 1, uct_ugni_ep_process_pending, NULL);
 
 }
-
+#endif
 static UCS_CLASS_CLEANUP_FUNC(uct_ugni_rdma_iface_t)
 {
     /*

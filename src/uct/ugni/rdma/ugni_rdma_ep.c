@@ -8,8 +8,8 @@
 #include <ucs/debug/log.h>
 #include <uct/base/uct_log.h>
 
-#include "ugni_rdma_ep.h"
 #include "ugni_rdma_iface.h"
+#include "ugni_rdma_ep.h"
 #include <uct/ugni/base/ugni_device.h>
 
 /* Endpoint operations */
@@ -743,18 +743,26 @@ UCS_CLASS_INIT_FUNC(uct_ugni_rdma_ep_t, uct_iface_t *tl_iface,
                     const uct_device_addr_t *dev_addr, const uct_iface_addr_t *addr)
 {
     UCS_CLASS_CALL_SUPER_INIT(uct_ugni_ep_t, tl_iface, dev_addr, addr);
-    uct_ugni_iface_t *iface = ucs_derived_of(tl_iface, uct_ugni_iface_t);
+    uct_ugni_rdma_iface_t *iface = ucs_derived_of(tl_iface, uct_ugni_rdma_iface_t);
 
-    uct_worker_progress_register(iface->super.worker, uct_ugni_rdma_progress, tl_iface);
+    uct_worker_progress_register(iface->super.super.worker, uct_ugni_rdma_progress, tl_iface);
 
     return UCS_OK;
 }
 
+ucs_status_t uct_ugni_rdma_progress_events(void *arg);
+
 UCS_CLASS_CLEANUP_FUNC(uct_ugni_rdma_ep_t)
 {
-    uct_ugni_iface_t *iface = ucs_derived_of(self->super.super.super.iface,
-                                             uct_ugni_iface_t);
-    uct_worker_progress_unregister(iface->super.worker,
+    uct_ugni_rdma_iface_t *iface = ucs_derived_of(self->super.super.super.iface,
+                                                  uct_ugni_rdma_iface_t);
+
+    while(self->super.outstanding > 0) {
+        //uct_ugni_rdma_progress_events(iface);
+        iface->super.flush_cb(iface);
+    }
+
+    uct_worker_progress_unregister(iface->super.super.worker,
                                    uct_ugni_rdma_progress, iface);
 }
 

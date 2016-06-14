@@ -91,6 +91,8 @@ static ucs_status_t uct_ugni_smsg_mbox_dereg(uct_ugni_smsg_iface_t *iface, uct_u
     return UCS_OK;
 }
 
+void uct_ugni_smsg_progress(void *arg);
+
 static UCS_CLASS_INIT_FUNC(uct_ugni_smsg_ep_t, uct_iface_t *tl_iface)
 {
     UCS_CLASS_CALL_SUPER_INIT(uct_ugni_ep_t, tl_iface, NULL, NULL);
@@ -106,6 +108,8 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_smsg_ep_t, uct_iface_t *tl_iface)
     uct_ugni_smsg_mbox_init(iface, self->smsg_attr);
     compact_smsg_attr(&self->smsg_attr->mbox_attr, &self->smsg_compact_attr);
 
+    uct_worker_progress_register(iface->super.super.worker, uct_ugni_smsg_progress, tl_iface);
+
     return UCS_OK;
 }
 
@@ -113,6 +117,9 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ugni_smsg_ep_t)
 {
     uct_ugni_smsg_iface_t *iface = ucs_derived_of(self->super.super.super.iface, uct_ugni_smsg_iface_t);
     ucs_status_t status;
+
+    uct_worker_progress_unregister(iface->super.super.worker,
+                                   uct_ugni_smsg_progress, iface);
 
     do {
         status = iface->super.super.super.ops.ep_flush(&self->super.super.super, 0, NULL);

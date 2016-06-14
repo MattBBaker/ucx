@@ -169,7 +169,7 @@ ucs_status_t progress_remote_cq(uct_ugni_smsg_iface_t *iface)
 
 UCS_CLASS_DEFINE_DELETE_FUNC(uct_ugni_smsg_iface_t, uct_iface_t);
 
-static void uct_ugni_smsg_progress(void *arg)
+void uct_ugni_smsg_progress(void *arg)
 {
     uct_ugni_smsg_iface_t *iface = (uct_ugni_smsg_iface_t *)arg;
     ucs_status_t status;
@@ -469,7 +469,7 @@ static UCS_CLASS_INIT_FUNC(uct_ugni_smsg_iface_t, uct_pd_h pd, uct_worker_h work
 
     /* TBD: eventually the uct_ugni_progress has to be moved to
      * udt layer so each ugni layer will have own progress */
-    uct_worker_progress_register(worker, uct_ugni_smsg_progress, self);
+    //uct_worker_progress_register(worker, uct_ugni_smsg_progress, self);
     pthread_mutex_unlock(&uct_ugni_global_lock);
     return UCS_OK;
 
