@@ -75,14 +75,14 @@ static ucs_status_t uct_ugni_rdma_iface_query(uct_iface_h tl_iface, uct_iface_at
                                          UCT_IFACE_FLAG_CONNECT_TO_IFACE |
                                          UCT_IFACE_FLAG_PENDING;
 
-    if(GNI_DEVICE_ARIES == iface->super.dev->type) {
+    //if(GNI_DEVICE_ARIES == iface->super.dev->type) {
         iface_attr->cap.flags         |= UCT_IFACE_FLAG_PUT_SHORT |
                                          UCT_IFACE_FLAG_ATOMIC_SWAP64 |
                                          UCT_IFACE_FLAG_ATOMIC_SWAP32 |
                                          UCT_IFACE_FLAG_ATOMIC_FADD32 |
                                          UCT_IFACE_FLAG_ATOMIC_ADD32 |
                                          UCT_IFACE_FLAG_ATOMIC_SWAP32;
-    }
+        //}
     iface_attr->overhead               = 80e-9; /* 80 ns */
     iface_attr->latency.overhead       = 900e-9; /* 900 ns */
     iface_attr->latency.growth         = 0;
