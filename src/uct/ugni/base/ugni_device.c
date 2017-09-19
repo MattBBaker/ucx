@@ -130,13 +130,22 @@ static ucs_status_t uct_ugni_fetch_pmi()
         return UCS_OK;
     }
 
-    /* Fetch information from Cray's PMI */
-    rc = PMI_Init(&spawned);
+    /* Do we need to init PMI or has someone else already done that? */
+    rc = PMI_Initialized(&spawned);
     if (PMI_SUCCESS != rc) {
-        ucs_error("PMI_Init failed, Error status: %d", rc);
+        ucs_error("PMI_Initialized failed, Error status: %d", rc);
         return UCS_ERR_IO_ERROR;
     }
-    ucs_debug("PMI spawned %d", spawned);
+
+    if (!spawned) {
+        /* Fetch information from Cray's PMI */
+        rc = PMI_Init(&spawned);
+        if (PMI_SUCCESS != rc) {
+            ucs_error("PMI_Init failed, Error status: %d", rc);
+            return UCS_ERR_IO_ERROR;
+        }
+        ucs_debug("PMI spawned %d", spawned);
+    }
 
     rc = PMI_Get_size(&job_info.pmi_num_of_ranks);
     if (PMI_SUCCESS != rc) {
