@@ -182,14 +182,14 @@ UCS_TEST_P(test_ucp_tag_offload, force_thresh_basic, "TM_FORCE_THRESH=4096",
 {
     uint64_t small_val      = 0xFAFA;
     const size_t big_size   = 5000;
-    int num_reqs            = 8;
+    unsigned num_reqs       = 8;
     int tag                 = 0x11;
     std::vector<request*> reqs;
     request *req;
 
     activate_offload(sender());
 
-    for (int i = 0; i < num_reqs - 1; ++i) {
+    for (unsigned i = 0; i < num_reqs - 1; ++i) {
         req = recv_nb_and_check(&small_val, sizeof(small_val), DATATYPE,
                                 tag, UCP_TAG_MASK_FULL);
         reqs.push_back(req);
@@ -207,7 +207,7 @@ UCS_TEST_P(test_ucp_tag_offload, force_thresh_basic, "TM_FORCE_THRESH=4096",
 
     // Now, all requests should be posted to the transport, because receive
     // buffer bigger than FORCE_THRESH has been posted
-    EXPECT_EQ(0, receiver().worker()->tm.expected.sw_all_count);
+    EXPECT_EQ(0u, receiver().worker()->tm.expected.sw_all_count);
 
     std::vector<request*>::const_iterator iter;
     for (iter = reqs.begin(); iter != reqs.end(); ++iter) {
@@ -220,11 +220,11 @@ UCS_TEST_P(test_ucp_tag_offload, force_thresh_blocked, "TM_FORCE_THRESH=4096",
 {
     uint64_t small_val      = 0xFAFA;
     const size_t big_size   = 5000;
-    int num_reqs            = 8;
+    unsigned num_reqs       = 8;
     int tag                 = 0x11;
     std::vector<request*> reqs;
     request *req;
-    int i;
+    unsigned i;
 
     activate_offload(sender());
 
@@ -264,7 +264,7 @@ UCS_TEST_P(test_ucp_tag_offload, force_thresh_blocked, "TM_FORCE_THRESH=4096",
 
     // Now, all requests should be posted to the transport, because receive
     // buffer bigger than FORCE_THRESH has been posted
-    EXPECT_EQ(0, receiver().worker()->tm.expected.sw_all_count);
+    EXPECT_EQ(0u, receiver().worker()->tm.expected.sw_all_count);
 
     std::vector<request*>::const_iterator iter;
     for (iter = reqs.begin(); iter != reqs.end(); ++iter) {
