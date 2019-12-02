@@ -22,14 +22,22 @@ ucp_do_am_bcopy_single(uct_pending_req_t *self, uint8_t am_id,
 {
     ucp_request_t *req = ucs_container_of(self, ucp_request_t, send.uct);
     ucp_ep_t *ep       = req->send.ep;
+    ucp_dt_state_t state   = req->send.state.dt;
     ssize_t packed_len;
 
     req->send.lane = ucp_ep_get_am_lane(ep);
     packed_len     = uct_ep_am_bcopy(ep->uct_eps[req->send.lane], am_id, pack_cb,
                                      req, 0);
     if (packed_len < 0) {
+        ucp_request_send_state_advance(req, &state,
+				       UCP_REQUEST_SEND_PROTO_BCOPY_AM,
+                                       (ucs_status_t)packed_len);
         return (ucs_status_t)packed_len;
     }
+
+    ucp_request_send_state_advance(req, &state,
+                                   UCP_REQUEST_SEND_PROTO_BCOPY_AM,
+                                   UCS_OK);
 
     return UCS_OK;
 }
@@ -44,6 +52,7 @@ ucs_status_t ucp_do_am_bcopy_multi(uct_pending_req_t *self, uint8_t am_id_first,
 {
     ucp_request_t *req = ucs_container_of(self, ucp_request_t, send.uct);
     ucp_ep_t *ep       = req->send.ep;
+    ucp_dt_state_t state   = req->send.state.dt;
     ucs_status_t status;
     size_t UCS_V_UNUSED max_middle;
     ssize_t packed_len;
@@ -79,11 +88,17 @@ ucs_status_t ucp_do_am_bcopy_multi(uct_pending_req_t *self, uint8_t am_id_first,
                        (offset + packed_len - hdr_size_middle <= req->send.length));
             if ((packed_len > 0) && (offset + packed_len - hdr_size_middle == req->send.length)) {
                 /* Last */
+                ucp_request_send_state_advance(req, &state,
+		    		               UCP_REQUEST_SEND_PROTO_BCOPY_AM,
+                                               (ucs_status_t)UCS_OK);
                 return UCS_OK;
             }
         }
 
         if (ucs_unlikely(packed_len < 0)) {
+            ucp_request_send_state_advance(req, &state,
+ 				           UCP_REQUEST_SEND_PROTO_BCOPY_AM,
+                                           (ucs_status_t)packed_len);
             if (req->send.lane != req->send.pending_lane) {
                 /* switch to new pending lane */
                 pending_adde_res = ucp_request_pending_add(req, &status, 0);
@@ -97,6 +112,10 @@ ucs_status_t ucp_do_am_bcopy_multi(uct_pending_req_t *self, uint8_t am_id_first,
                 return (ucs_status_t)packed_len;
             }
         } else {
+            ucp_request_send_state_advance(req, &state,
+				           UCP_REQUEST_SEND_PROTO_BCOPY_AM,
+                                           UCS_OK);
+
             return UCS_INPROGRESS;
         }
     }
