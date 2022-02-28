@@ -100,3 +100,6 @@ test/apps/test_ucp_config
 test/apps/test_memtrack_limit
 test/apps/profiling/ucx_profiling
 cmake/*.cmake
+*~
+\#*\#
+.\#*

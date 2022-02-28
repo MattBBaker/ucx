@@ -633,6 +633,10 @@ bool uct_test::has_gpu() const {
             has_transport("rocm_copy"));
 }
 
+bool uct_test::has_ofi() const {
+    return (has_transport("ofi"));
+}
+
 void uct_test::stats_activate()
 {
     ucs_stats_cleanup();
