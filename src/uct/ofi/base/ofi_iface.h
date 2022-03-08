@@ -3,12 +3,15 @@
 
 #include "ofi_def.h"
 #include "ofi_types.h"
+#include "ofi_md.h"
 #include <uct/base/uct_iface.h>
 #include <uct/api/uct.h>
 
+/*
 UCS_CLASS_DECLARE(uct_ofi_iface_t, uct_md_h, uct_worker_h,
                   const uct_iface_params_t*, uct_iface_ops_t*,
-                  const uct_iface_config_t* UCS_STATS_ARG(ucs_stats_node_t*))
+                  const uct_iface_config_t*)
+    */
 
 ucs_status_t uct_ofi_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                   uct_completion_t *comp);
@@ -18,5 +21,6 @@ int uct_ofi_iface_is_reachable(uct_iface_h tl_iface, const uct_device_addr_t *de
 void uct_ofi_base_desc_init(ucs_mpool_t *mp, void *obj, void *chunk);
 void uct_ofi_base_desc_key_init(uct_iface_h iface, void *obj, uct_mem_h memh);
 void uct_ofi_cleanup_base_iface(uct_ofi_iface_t *iface);
+int uct_ofi_get_next_av(uct_ofi_av_t *av);
 
 #endif

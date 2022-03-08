@@ -7,8 +7,8 @@
 /* FI_PROGRESS_UNSPEC */
 
 
-/* OFI offers a hmem and sys mem domain */
-/* TODO: Right now only exposes sys */
+
+
 static ucs_status_t uct_ofi_query_md_resources(uct_component_h component,
                            uct_md_resource_desc_t **resources_p,
                            unsigned *num_resources_p)
@@ -25,10 +25,7 @@ static ucs_status_t uct_ofi_query_md_resources(uct_component_h component,
      * the wrong approach?  */
     ucs_snprintf_zero(resource[0].md_name, UCT_MD_NAME_MAX, "%s sys memory",
                       component->name);
-    /* 
-    ucs_snprintf_zero(resource[0]->md_name, UCT_MD_NAME_MAX, "%s hmem memory",
-                      component->name);
-    */
+
     *resources_p     = resource;
     *num_resources_p = 1;
     return UCS_OK;
@@ -39,9 +36,7 @@ static ucs_status_t uct_ofi_md_query(uct_md_h tl_md, uct_md_attr_t *md_attr)
     uct_ofi_md_t *md = ucs_derived_of(tl_md, uct_ofi_md_t);
 
     ucs_trace("OFI md query");
-    md_attr->cap.flags            = UCT_MD_FLAG_REG       |
-                                    UCT_MD_FLAG_NEED_MEMH |
-                                    UCT_MD_FLAG_NEED_RKEY;
+    md_attr->cap.flags            = UCT_MD_FLAG_REG;
     /* TODO: hmem option */
     md_attr->cap.reg_mem_types    = UCS_BIT(UCS_MEMORY_TYPE_HOST);
     md_attr->cap.alloc_mem_types  = 0;
@@ -123,6 +118,7 @@ uct_ofi_md_open(uct_component_h component, const char *md_name,
     md_ops.mem_dereg          = uct_ofi_mem_dereg;
     md_ops.mkey_pack          = uct_ofi_rkey_pack;
     md_ops.detect_memory_type = ucs_empty_function_return_unsupported;
+    md_ops.is_sockaddr_accessible = ucs_empty_function_return_zero_int;
 
     md.super.ops              = &md_ops;
     md.super.component        = &uct_ofi_component;

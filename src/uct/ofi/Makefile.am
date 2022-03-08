@@ -7,10 +7,10 @@ if HAVE_OFI
 
 module_LTLIBRARIES      = libuct_ofi.la
 libuct_ofi_la_CPPFLAGS = $(BASE_CPPFLAGS)
-libuct_ofi_la_CFLAGS   = $(BASE_CFLAGS) -I$(HOME)/local/fabric/include
+libuct_ofi_la_CFLAGS   = $(BASE_CFLAGS) -I/opt/cray/libfabric/1.11.0.4.75/include/
 libuct_ofi_la_LIBADD   = $(top_builddir)/src/ucs/libucs.la \
                           $(top_builddir)/src/uct/libuct.la
-libuct_ofi_la_LDFLAGS  = -L$(HOME)/local/fabric/lib -lfabric -version-info $(SOVERSION)
+libuct_ofi_la_LDFLAGS  = -L/opt/cray/libfabric/1.11.0.4.75/lib64/ -lfabric -version-info $(SOVERSION)
 
 noinst_HEADERS = \
 	base/ofi_def.h \

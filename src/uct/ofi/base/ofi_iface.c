@@ -1,47 +1,119 @@
+#include <rdma/fi_cm.h>
 #include <uct/base/uct_iface.h>
 #include "ofi_iface.h"
+#include "ofi_ep.h"
 
-int uct_ofi_iface_is_reachable(uct_iface_h tl_iface, const uct_device_addr_t *dev_addr, const uct_iface_addr_t *iface_addr)
+
+static ucs_config_field_t uct_ofi_iface_config_table[] = {
+    {"", "ALLOC=huge,mmap,heap", NULL,
+     ucs_offsetof(uct_ofi_iface_config_t, super),
+     UCS_CONFIG_TYPE_TABLE(uct_iface_config_table)},
+
+     UCT_IFACE_MPOOL_CONFIG_FIELDS("OFI", -1, 0, "ofi",
+                                   ucs_offsetof(uct_ofi_iface_config_t, mpool),
+                                   "\nAttention: Setting this param with value != -1 is a dangerous thing\n"
+                                   "and could cause deadlock or performance degradation."),
+
+    {NULL}
+};
+
+/* Note: This isn't thread safe. Does it need to be? */
+/* TODO: Evaluate inlining this */
+int uct_ofi_get_next_av(uct_ofi_av_t *av)
 {
-    ucs_trace("iface reachable");
-    //TODO: This is where the call to fi_getinfo() goes
-    return 0;
+    int idx = UCS_BITMAP_FFS(av->free);
+    if (idx > UCT_OFI_EPS_PER_AV) {
+        /* TODO: Is opening more AVs a valid way of handling this? */
+        ucs_error("Exceeded UCT_OFI_EPS_PER_AV!");
+        return idx;
+    }
+    UCS_BITMAP_UNSET(av->free, idx);
+    return idx;
 }
 
-UCS_CLASS_INIT_FUNC(uct_ofi_iface_t, uct_md_h tl_md, uct_worker_h worker,
-                    const uct_iface_params_t *params,
-                    uct_iface_ops_t *uct_ofi_iface_ops,
-                    const uct_iface_config_t *tl_config
-                    UCS_STATS_ARG(ucs_stats_node_t *stats_parent))
+
+void uct_ofi_free_av(uct_ofi_av_t *av, int idx)
 {
-    struct fi_av_attr av_attr = {0};
-    uct_ofi_md_t *md = ucs_derived_of(tl_md, uct_ofi_md_t);
+    UCS_BITMAP_SET(av->free, idx);
+}
+
+
+ucs_status_t uct_ofi_iface_get_address(uct_iface_h tl_iface,
+                                 uct_iface_addr_t *tl_addr)
+{
+    uct_ofi_iface_t *iface = ucs_derived_of(tl_iface, uct_ofi_iface_t);
+    uct_ofi_name_t *addr = (uct_ofi_name_t *)tl_addr;
     int status;
 
-    ucs_trace("OFI init iface");
+    ucs_debug("OFI get iface address");
     
-    UCS_CLASS_CALL_SUPER_INIT(uct_base_iface_t, uct_ofi_iface_ops, NULL, tl_md,
-                              worker, params,
-                              tl_config UCS_STATS_ARG(params->stats_root)
-                              UCS_STATS_ARG(UCT_OFI_MD_NAME));
-    av_attr.type = FI_AV_MAP;
-    status = fi_av_open(md->dom_ctx,
-                        &av_attr,
-                        &self->av,
-                        NULL);
+    status = fi_getname(iface->fid, &addr->name, &addr->size);
     if( !status ) {
-        ucs_debug("OFI iface made successfully");
         return UCS_OK;
     } else {
-        ucs_error("OFI iface creation failed");
         return UCS_ERR_NO_DEVICE;
     }
 }
 
-UCS_CLASS_DEFINE_NEW_FUNC(uct_ofi_iface_t, uct_iface_t, uct_md_h, uct_worker_h,
-                          const uct_iface_params_t*, uct_iface_ops_t *,
-                          const uct_iface_config_t * UCS_STATS_ARG(ucs_stats_node_t *));
 
+int uct_ofi_iface_is_reachable(uct_iface_h tl_iface, const uct_device_addr_t *dev_addr, const uct_iface_addr_t *iface_addr)
+{
+    struct fi_info hints = {0};
+    struct fi_info *info;
+    uct_ofi_name_t *addr = (uct_ofi_name_t *)iface_addr;
+    int ret;
+    
+    hints.caps = FI_RMA | FI_ATOMIC | FI_TAGGED;
+
+    ucs_debug("OFI iface reachable");
+    ret = fi_getinfo(fi_version(), addr->name, NULL, 0, &hints, &info);
+
+    if (ret == -FI_ENODATA) {
+        ucs_trace("OFI could not reach address");
+        return 0;
+    } else {
+        ucs_trace("OFI can reach this address");
+        fi_freeinfo(info);
+        return 1;
+    }
+}
+
+
+static ucs_status_t uct_ofi_iface_query(uct_iface_h tl_iface, uct_iface_attr_t *iface_attr)
+{
+    uct_ofi_iface_t *iface = ucs_derived_of(tl_iface, uct_ofi_iface_t);
+    uct_base_iface_query(&iface->super, iface_attr);
+    ucs_trace("Query OFI");
+    
+    iface_attr->cap.am.max_short       = 0;
+    iface_attr->cap.am.max_bcopy       = 0;
+    iface_attr->cap.am.opt_zcopy_align = 1;
+    iface_attr->cap.am.align_mtu       = iface_attr->cap.am.opt_zcopy_align;
+    iface_attr->device_addr_len        = 0;
+    iface_attr->iface_addr_len         = sizeof(uct_ofi_name_t);
+    iface_attr->ep_addr_len            = sizeof(uct_ofi_name_t);
+    iface_attr->max_conn_priv          = 0;
+    iface_attr->cap.flags              = 0;
+    iface_attr->overhead               = 1e-6;  /* 1 usec */
+    iface_attr->latency                = ucs_linear_func_make(40e-6, 0); /* 40 usec */
+    iface_attr->bandwidth.dedicated    = 1.0 * UCS_MBYTE; /* bytes */
+    iface_attr->bandwidth.shared       = 0;
+    iface_attr->priority               = 0;
+    
+    return UCS_OK;
+}
+
+
+ucs_status_t uct_ofi_flush(uct_iface_h tl_iface, unsigned flags,
+                                  uct_completion_t *comp)
+{
+    return  UCS_ERR_UNSUPPORTED;
+}
+
+static unsigned uct_ofi_progress(void *arg)
+{
+    return 0;
+}
 
 void uct_ofi_cleanup_base_iface(uct_ofi_iface_t *iface)
 {
@@ -52,4 +124,119 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ofi_iface_t)
     uct_ofi_cleanup_base_iface(self);
 }
 
+extern ucs_class_t UCS_CLASS_DECL_NAME(uct_ofi_iface_t);
+static UCS_CLASS_DEFINE_DELETE_FUNC(uct_ofi_iface_t, uct_iface_t);
+
+static uct_iface_ops_t uct_ofi_iface_ops = {
+    .ep_pending_add           = uct_ofi_ep_pending_add,
+    .ep_pending_purge         = uct_ofi_ep_pending_purge,
+    .ep_flush                 = uct_ofi_ep_flush,
+    .ep_fence                 = uct_base_ep_fence,
+    .ep_create                = UCS_CLASS_NEW_FUNC_NAME(uct_ofi_ep_t),
+    .ep_destroy               = UCS_CLASS_DELETE_FUNC_NAME(uct_ofi_ep_t),
+    .ep_get_address           = uct_ofi_ep_get_address,
+    .iface_flush              = uct_ofi_flush,
+    .iface_fence              = uct_base_iface_fence,
+    .iface_progress_enable    = ucs_empty_function,
+    .iface_progress_disable   = ucs_empty_function,
+    .iface_progress           = (void*)uct_ofi_progress,
+    .iface_close              = UCS_CLASS_DELETE_FUNC_NAME(uct_ofi_iface_t),
+    .iface_query              = uct_ofi_iface_query,
+    .iface_get_device_address = uct_ofi_iface_get_dev_address,
+    .iface_get_address        = uct_ofi_iface_get_address,
+    .iface_is_reachable       = uct_ofi_iface_is_reachable
+};
+
+static uct_iface_internal_ops_t uct_ofi_iface_internal_ops = {
+    .iface_estimate_perf = uct_base_iface_estimate_perf,
+    .iface_vfs_refresh   = (uct_iface_vfs_refresh_func_t)ucs_empty_function,
+    .ep_query            = (uct_ep_query_func_t)ucs_empty_function_return_unsupported,
+    .ep_invalidate       = (uct_ep_invalidate_func_t)ucs_empty_function_return_unsupported    
+};
+
+
+static ucs_status_t uct_ofi_setup_av(uct_ofi_md_t *md, uct_ofi_iface_t *iface)
+{
+    struct fi_av_attr av_attr = {0};
+    int status;
+
+    iface->av = ucs_malloc(sizeof(uct_ofi_av_t), "Address vector metadata");
+    iface->av->table = ucs_malloc(sizeof(fi_addr_t) * UCT_OFI_EPS_PER_AV, "Address vector");
+    av_attr.type = FI_AV_MAP;
+    status = fi_av_open(md->dom_ctx,
+                        &av_attr,
+                        &iface->av->av,
+                        NULL);
+    if(!status) {
+        UCS_BITMAP_SET_ALL(iface->av->free);
+        return UCS_OK;
+    } else {
+        return UCS_ERR_NO_RESOURCE;
+    }
+}
+
+static ucs_status_t uct_ofi_setup_target(uct_ofi_md_t *md, uct_ofi_iface_t *iface)
+{
+    return UCS_OK;
+}
+
+static ucs_status_t uct_ofi_setup_cqs(uct_ofi_md_t *md, uct_ofi_iface_t *iface)
+{
+    return UCS_OK;
+}
+
+static ucs_status_t uct_ofi_setup_fi_info(uct_ofi_md_t *md, uct_ofi_iface_t *iface, const uct_iface_params_t *params)
+{
+    struct fi_info hints = {0};
+    hints.caps = FI_RMA | FI_ATOMIC | FI_TAGGED;
+    ret = fi_getinfo(fi_version(), NULL, NULL, 0, &hints, &iface->info);
+    if ( ret ) {
+        /* TODO: Better return codes? */
+        return UCS_ERR_NO_MEMORY;
+    } else {
+        return UCS_OK;
+    }
+}
+
+UCS_CLASS_INIT_FUNC(uct_ofi_iface_t, uct_md_h tl_md, uct_worker_h worker,
+                    const uct_iface_params_t *params,
+                    const uct_iface_config_t *tl_config
+                    )
+{
+    ucs_status_t ret;
+    uct_ofi_md_t *md = ucs_derived_of(tl_md, uct_ofi_md_t);
+    
+    ucs_trace("OFI init iface");
+    UCS_CLASS_CALL_SUPER_INIT(uct_base_iface_t, &uct_ofi_iface_ops, &uct_ofi_iface_internal_ops, tl_md,
+                              worker, params,
+                              tl_config UCS_STATS_ARG(params->stats_root)
+                              UCS_STATS_ARG("OFI_MD"));
+
+    ret = uct_ofi_setup_fi_info(md, self, params);
+    if( ret != UCS_OK ) {
+        goto out;
+    }
+    ret = uct_ofi_setup_target(md, self);
+    if( ret != UCS_OK ) {
+        goto out;
+    }
+    ret = uct_ofi_setup_cqs(md, self);
+    if( ret != UCS_OK ) {
+        goto out;
+    }
+    ret = uct_ofi_setup_av(md, self);
+    if( ret != UCS_OK ) {
+        goto out;
+    }    
+    ucs_debug("OFI iface creation successful");
+ out:
+    return ret;
+}
+
 UCS_CLASS_DEFINE(uct_ofi_iface_t, uct_base_iface_t);
+UCS_CLASS_DEFINE_NEW_FUNC(uct_ofi_iface_t, uct_iface_t, uct_md_h, uct_worker_h,
+                          const uct_iface_params_t*,
+                          const uct_iface_config_t *);
+UCT_TL_DEFINE(&uct_ofi_component, ofi, uct_ofi_query_devices,
+              uct_ofi_iface_t, "OFI_",
+              uct_ofi_iface_config_table, uct_ofi_iface_config_t);
