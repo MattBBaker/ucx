@@ -18,23 +18,13 @@ noinst_HEADERS = \
 	base/ofi_md.h \
 	base/ofi_device.h \
 	base/ofi_iface.h \
-	base/ofi_ep.h \
-	hmem/ofi_def.h \
-	hmem/ofi_types.h \
-	hmem/ofi_md.h \
-	hmem/ofi_device.h \
-	hmem/ofi_iface.h \
-	hmem/ofi_ep.h
+	base/ofi_ep.h
 
 libuct_ofi_la_SOURCES = \
 	base/ofi_md.c \
 	base/ofi_device.c \
 	base/ofi_iface.c \
-	base/ofi_ep.c \
-	hmem/ofi_md.c \
-	hmem/ofi_device.c \
-	hmem/ofi_iface.c \
-	hmem/ofi_ep.c
+	base/ofi_ep.c
 
 PKG_CONFIG_NAME=ofi
 

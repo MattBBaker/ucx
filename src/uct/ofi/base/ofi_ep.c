@@ -32,6 +32,13 @@ UCS_CLASS_INIT_FUNC(uct_ofi_ep_t, const uct_ep_params_t *params)
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ofi_ep_t)
 {
+    uct_ofi_iface_t *iface =  ucs_derived_of(self->super.super.iface, uct_ofi_iface_t);
+    int status;
+
+    status = fi_av_remove(iface->av->av, &iface->av->table[self->av_index], 1, 0);
+    if (status) {
+        ucs_error("OFI: fi_av_remove() failed: %s", fi_strerror(status));
+    }
 }
 
 UCS_CLASS_DEFINE(uct_ofi_ep_t, uct_base_ep_t);

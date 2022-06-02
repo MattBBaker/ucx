@@ -1,6 +1,7 @@
 #include "ofi_md.h"
 #include "ofi_def.h"
 #include <ucs/debug/log.h>
+#include <stdint.h>
 
 /* separate MDs for system mem and hmem */
 /* TODO: Looks like RKEYs maynot be needed, need to adjust since right now I'm just assuming it does */
@@ -61,6 +62,7 @@ static void uct_ofi_md_close(uct_md_h md)
     ofi_md->ref_count--;
     if (!ofi_md->ref_count) {
         ucs_debug("Tearing down OFI domain");
+        
 	/* TODO: teardown code */
     }
 }
@@ -69,14 +71,32 @@ static void uct_ofi_md_close(uct_md_h md)
 static ucs_status_t uct_ofi_mem_reg(uct_md_h md, void *address, size_t length,
                                     unsigned flags, uct_mem_h *memh_p)
 {
-    return UCS_ERR_NO_MEMORY;
+    uct_ofi_md_t *ofi_md = ucs_derived_of(md, uct_ofi_md_t);
+    int ret;
+    struct fid_mr **mr = (struct fid_mr **)memh_p;
+
+    ucs_debug("address=%p length=%zd", address, length);
+
+    ret = fi_mr_reg(ofi_md->dom_ctx, address, length, FI_REMOTE_WRITE | FI_REMOTE_READ | FI_READ | FI_WRITE,
+                    0, 0ULL, 0, mr, NULL);
+
+    UCT_OFI_CHECK_ERROR(ret, "fi_mr_reg", UCS_ERR_NO_MEMORY);
+    return UCS_OK;
 }
 
 
 static ucs_status_t uct_ofi_mem_dereg(uct_md_h md,
                                       const uct_md_mem_dereg_params_t *params)
 {
-    return UCS_ERR_IO_ERROR;
+    int ret;
+    struct fid_mr *mr = (struct fid_mr *)params->memh;
+    ucs_trace("uct_ofi_mem_dereg");
+    if (params->field_mask & UCT_MD_MEM_DEREG_FIELD_FLAGS && params->flags & UCT_MD_MEM_DEREG_FLAG_INVALIDATE) {
+        return UCS_ERR_UNSUPPORTED;
+    }
+    ret = fi_close(&mr->fid);
+    UCT_OFI_CHECK_ERROR(ret, "fi_close on mem dereg", UCS_ERR_IO_ERROR);
+    return UCS_OK;
 }
 
 

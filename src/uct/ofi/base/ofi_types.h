@@ -30,7 +30,9 @@ typedef struct uct_ofi_iface {
     ucs_arbiter_t           arbiter;     /**< arbiter structure for pending ops */
     uct_ofi_av_t            *av;         /**< libfabric address vector */
     struct fi_info          *info;
-    fid_t fid;
+    struct fid_ep *local;
+    struct fid_cq *tx_cq;
+    struct fid_cq *rx_cq;
 } uct_ofi_iface_t;
 
 typedef struct uct_ofi_iface_config {

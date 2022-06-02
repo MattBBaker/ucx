@@ -100,6 +100,22 @@ err_out:
     return ret;
 }
 
+
+ucs_status_t uct_ofi_destroy_fabric(uct_ofi_md_t *md)
+{
+    int ret;
+
+    ret = fi_close(&md->dom_ctx->fid);
+    UCT_OFI_CHECK_ERROR(ret, "Closing domain fid", UCS_ERR_INVALID_PARAM);
+
+    ret = fi_close(&md->fab_ctx->fid);
+    UCT_OFI_CHECK_ERROR(ret, "Closing frabric fid", UCS_ERR_INVALID_PARAM);
+
+    fi_freeinfo(all);
+
+    return UCS_OK;
+}
+
 /* TODO: more flexible in capabilities */
 ucs_status_t uct_ofi_init_fabric(uct_ofi_md_t *md, char *fabric_name)
 {
@@ -108,14 +124,13 @@ ucs_status_t uct_ofi_init_fabric(uct_ofi_md_t *md, char *fabric_name)
     ucs_trace("Init fabric");
 
     if (uct_ofi_populate_nics() != UCS_OK){
-        goto out;
+        return UCS_ERR_NO_DEVICE;
     }
 
     /* TODO: Make this work so fabrics can be selected by name */
     if( fabric_name ) {
         ucs_error("Selecting dev by name not yet supported");
-        ret = 1;
-        goto out;
+        return UCS_ERR_NO_DEVICE;
     } else {
         md->fab_info = fi_dupinfo(all);
     }
@@ -124,25 +139,14 @@ ucs_status_t uct_ofi_init_fabric(uct_ofi_md_t *md, char *fabric_name)
     /* Third param is a context for async ops. Could be useful */
     /* TODO: is fab_info needed after this? */
     ret = fi_fabric(md->fab_info->fabric_attr, &md->fab_ctx, NULL);
-    if( ret != 0 ) {
-        ucs_error("No fabric was found");
-        goto out;
-    }
+    UCT_OFI_CHECK_ERROR(ret, "No fabric found", UCS_ERR_NO_DEVICE);
 
     /* this should be an iface */
     /* or maybe not? */
     ret = fi_domain(md->fab_ctx, md->fab_info, &md->dom_ctx, NULL);
-    if( ret != 0 ) {
-        ucs_error("Failed to creat domain");
-    }
-
- out:
-    if (ret != 0) {
-        return UCS_ERR_NO_DEVICE;
-    } else {
-        ucs_debug("Init successful. Using fabric named: %s", md->fab_info->fabric_attr->name);
-        return UCS_OK;
-    }
+    UCT_OFI_CHECK_ERROR(ret, "Could not make domain", UCS_ERR_NO_DEVICE);
+    ucs_debug("Using fabric named: %s", md->fab_info->fabric_attr->name);
+    return UCS_OK;
 }
 
 static ucs_sys_device_t populate_sys_device(struct fi_info *info)
@@ -181,25 +185,19 @@ ucs_status_t uct_ofi_query_devices(uct_md_h tl_md,
                                    uct_tl_device_resource_t **tl_devices_p,
                                    unsigned *num_tl_devices_p)
 {
-    //uct_ofi_md_t *md = ucs_derived_of(tl_md, uct_ofi_md_t);
     uct_tl_device_resource_t *resources;
     int i;
-    //int *num_devices;
     ucs_status_t status = UCS_OK;
-    //struct fi_info **devices;
 
     ucs_debug("Querying OFI devices");
-    //get_fi_info_count(md->fab_info, &num_devices, &devices);
     status = uct_ofi_populate_nics();
     resources = ucs_calloc(num_nics, sizeof(uct_tl_device_resource_t),
                            "ofi uct_tl_device_resource_t");
     for (i=0; i < num_nics; i++) {
-        //fill_ofi_info(&resources[i], devices[i]);
         fill_ofi_info(&resources[i], nics[i]);
     }
 
  error:
-    //ucs_free(devices);
     *num_tl_devices_p = num_nics;
     *tl_devices_p     = resources;
 

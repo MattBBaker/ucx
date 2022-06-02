@@ -47,7 +47,7 @@ ucs_status_t uct_ofi_iface_get_address(uct_iface_h tl_iface,
 
     ucs_debug("OFI get iface address");
     
-    status = fi_getname(iface->fid, &addr->name, &addr->size);
+    status = fi_getname((fid_t)iface->local, &addr->name, &addr->size);
     if( !status ) {
         return UCS_OK;
     } else {
@@ -115,8 +115,33 @@ static unsigned uct_ofi_progress(void *arg)
     return 0;
 }
 
+static void clean_av(uct_ofi_iface_t *iface)
+{
+    fi_close(&iface->av->av->fid);
+}
+
+static void clean_cq(uct_ofi_iface_t *iface)
+{
+    fi_close(&iface->tx_cq->fid);
+    fi_close(&iface->rx_cq->fid);
+}
+
+static void clean_ep(uct_ofi_iface_t *iface)
+{
+    fi_close(&iface->local->fid);
+}
+
+static void clean_info(uct_ofi_iface_t *iface)
+{
+    fi_freeinfo(iface->info);
+}
+
 void uct_ofi_cleanup_base_iface(uct_ofi_iface_t *iface)
 {
+    clean_ep(iface);
+    clean_cq(iface);
+    clean_av(iface);
+    clean_info(iface);
 }
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ofi_iface_t)
@@ -167,27 +192,76 @@ static ucs_status_t uct_ofi_setup_av(uct_ofi_md_t *md, uct_ofi_iface_t *iface)
                         &av_attr,
                         &iface->av->av,
                         NULL);
+    if (status) {
+        return UCS_ERR_NO_RESOURCE;
+    }
+    
+    status = fi_ep_bind(iface->local, &iface->av->av->fid, 0);
     if(!status) {
         UCS_BITMAP_SET_ALL(iface->av->free);
         return UCS_OK;
     } else {
         return UCS_ERR_NO_RESOURCE;
-    }
+    }    
 }
 
 static ucs_status_t uct_ofi_setup_target(uct_ofi_md_t *md, uct_ofi_iface_t *iface)
 {
-    return UCS_OK;
+    int status;
+    ucs_status_t ret = UCS_OK;
+
+    status = fi_endpoint(md->dom_ctx, iface->info, &iface->local, NULL);
+
+    if ( status ) {
+        ret = UCS_ERR_NO_RESOURCE;
+    }
+    
+    return ret;
 }
 
 static ucs_status_t uct_ofi_setup_cqs(uct_ofi_md_t *md, uct_ofi_iface_t *iface)
 {
+    struct fi_cq_attr attr = {0};
+    int status;
+
+    attr.format = FI_CQ_FORMAT_DATA;
+    attr.size = 0;
+    attr.wait_obj  = FI_WAIT_NONE;
+
+    ucs_trace("Opening CQs");
+    status = fi_cq_open(md->dom_ctx, &attr, &iface->tx_cq, NULL);
+    if (status) {
+        ucs_error("Could not open CQ: %s", fi_strerror(status));
+        return UCS_ERR_NO_RESOURCE;
+    }
+
+    status = fi_cq_open(md->dom_ctx, &attr, &iface->rx_cq, NULL);
+    if (status) {
+        ucs_error("Could not open CQ: %s", fi_strerror(status));
+        return UCS_ERR_NO_RESOURCE;
+    }
+
+    ucs_trace("Binding CQs");
+    status = fi_ep_bind(iface->local, &iface->tx_cq->fid, FI_TRANSMIT);
+    if (status) {
+        ucs_error("Could not open CQ: %s", fi_strerror(status));
+        return UCS_ERR_NO_RESOURCE;
+    }
+
+    status = fi_ep_bind(iface->local, &iface->rx_cq->fid, FI_RECV);
+    if (status) {
+        ucs_error("Could not open CQ: %s", fi_strerror(status));
+        return UCS_ERR_NO_RESOURCE;
+    }
+    
     return UCS_OK;
 }
 
 static ucs_status_t uct_ofi_setup_fi_info(uct_ofi_md_t *md, uct_ofi_iface_t *iface, const uct_iface_params_t *params)
 {
     struct fi_info hints = {0};
+    int ret;
+    
     hints.caps = FI_RMA | FI_ATOMIC | FI_TAGGED;
     ret = fi_getinfo(fi_version(), NULL, NULL, 0, &hints, &iface->info);
     if ( ret ) {
@@ -206,7 +280,7 @@ UCS_CLASS_INIT_FUNC(uct_ofi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     ucs_status_t ret;
     uct_ofi_md_t *md = ucs_derived_of(tl_md, uct_ofi_md_t);
     
-    ucs_trace("OFI init iface");
+    ucs_debug("OFI init iface");
     UCS_CLASS_CALL_SUPER_INIT(uct_base_iface_t, &uct_ofi_iface_ops, &uct_ofi_iface_internal_ops, tl_md,
                               worker, params,
                               tl_config UCS_STATS_ARG(params->stats_root)
@@ -216,19 +290,30 @@ UCS_CLASS_INIT_FUNC(uct_ofi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     if( ret != UCS_OK ) {
         goto out;
     }
+    ucs_trace("OFI info allocated");
     ret = uct_ofi_setup_target(md, self);
     if( ret != UCS_OK ) {
-        goto out;
+        goto out_info;
     }
+    ucs_trace("OFI target ep setup");
     ret = uct_ofi_setup_cqs(md, self);
     if( ret != UCS_OK ) {
-        goto out;
+        goto out_ep;
     }
+    ucs_trace("OFI cqs setup");
     ret = uct_ofi_setup_av(md, self);
     if( ret != UCS_OK ) {
-        goto out;
-    }    
+        goto out_cq;
+    }
     ucs_debug("OFI iface creation successful");
+    return UCS_OK;
+ 
+ out_cq:
+    clean_cq(self);
+ out_ep:
+    clean_ep(self);
+ out_info:
+    clean_info(self);
  out:
     return ret;
 }
