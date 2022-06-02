@@ -110,9 +110,40 @@ ucs_status_t uct_ofi_flush(uct_iface_h tl_iface, unsigned flags,
     return  UCS_ERR_UNSUPPORTED;
 }
 
+static ucs_status_t handle_cq_error(struct fid_cq *cq, int ret)
+{
+    /* TODO: More sophisticated cq handling */
+    /* This function should return UCS_OK to tell the progress
+       thread to continue and UCS_ERR_* to stop progress. */
+    UCT_OFI_CHECK_ERROR(ret, "Err reading CQ", UCS_OK);
+    return UCS_OK;
+}
+
+static int progress_cq(struct fid_cq *cq)
+{
+    struct fi_cq_entry entry;
+    int ret, count=-1;
+    
+    do {
+        count++;
+        ret = fi_cq_read(cq, &entry, 1);
+        if (ret < 0 && ret != -FI_EAGAIN) {
+            handle_cq_error(cq, ret);
+        }
+    } while (ret != -FI_EAGAIN);
+
+    return count;
+}
+
 static unsigned uct_ofi_progress(void *arg)
 {
-    return 0;
+    int count = 0;
+    uct_ofi_iface_t *iface = (uct_ofi_iface_t *)arg;
+
+    count = progress_cq(iface->tx_cq);
+    count += progress_cq(iface->rx_cq);
+
+    return count;
 }
 
 static void clean_av(uct_ofi_iface_t *iface)
